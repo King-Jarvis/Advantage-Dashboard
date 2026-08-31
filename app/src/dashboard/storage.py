@@ -26,7 +26,20 @@ def resolve_root(cli_value=None):
 
 
 def configure(root):
+    """Point the module at a data root and make sure it exists.
+
+    Drops this thread's cached connection: after a reconfigure it would still
+    be open against the previous file, so every subsequent query would read
+    and write the wrong database while appearing to work.
+    """
     global ROOT, DBPATH, LOGFILE
+    old = getattr(_local, "conn", None)
+    if old is not None:
+        try:
+            old.close()
+        except sqlite3.Error:
+            pass
+        _local.conn = None
     ROOT = os.path.abspath(os.path.expanduser(root))
     DBPATH = os.path.join(ROOT, "dashboard.db")
     LOGFILE = os.path.join(ROOT, "dashboard.log")

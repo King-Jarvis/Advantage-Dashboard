@@ -100,3 +100,20 @@ def test_get_conn_is_one_connection_per_thread(tmp_path):
     # sqlite3 connections are not thread-safe; sharing one across threads is
     # how "recursive use of cursors" and silent corruption arrive.
     assert seen[0] is not a
+
+
+def test_reconfiguring_drops_the_stale_connection(tmp_path):
+    """A cached connection must not survive a change of data root.
+
+    Otherwise every query after a reconfigure silently reads and writes the
+    previous database while appearing to work.
+    """
+    storage.configure(str(tmp_path / "one"))
+    schema.migrate(storage.get_conn())
+    a = ledger.create_account(storage.get_conn(), "OnlyInFirst")
+
+    storage.configure(str(tmp_path / "two"))
+    schema.migrate(storage.get_conn())
+    found = storage.get_conn().execute(
+        "SELECT COUNT(*) c FROM accounts WHERE id=?", (a,)).fetchone()["c"]
+    assert found == 0, "second database should not see the first one's rows"

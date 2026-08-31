@@ -104,6 +104,32 @@ CREATE TABLE IF NOT EXISTS budget_months (
     PRIMARY KEY (month, category_id)
 );
 
+-- ── Identity ─────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS users (
+    id            TEXT PRIMARY KEY,
+    username      TEXT NOT NULL UNIQUE,
+    pw_hash       TEXT,                       -- NULL for Google-only accounts
+    pw_salt       TEXT,
+    google_sub    TEXT UNIQUE,                -- Google's stable account id
+    created_at    TEXT NOT NULL,
+    last_login_at TEXT,
+    failed_count  INTEGER NOT NULL DEFAULT 0,
+    locked_until  TEXT                        -- ISO timestamp, NULL when open
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    id           TEXT PRIMARY KEY,            -- opaque, 256 bits of entropy
+    user_id      TEXT NOT NULL REFERENCES users(id),
+    csrf_token   TEXT NOT NULL,
+    created_at   TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    expires_at   TEXT NOT NULL,               -- absolute cap, never extended
+    ip           TEXT NOT NULL DEFAULT '',
+    user_agent   TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS ix_sessions_user ON sessions(user_id);
+
 -- ── Audit ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS audit_log (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
