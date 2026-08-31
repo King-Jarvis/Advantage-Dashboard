@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import ssl
 import sys
 
 from . import auth, schema, server, storage
@@ -18,8 +19,11 @@ def main(argv=None):
                    help="where the database lives. Default $DASHBOARD_DATA, "
                         "else ~/.dashboard. Never inside the checkout.")
     p.add_argument("--tls", action="store_true",
-                   help="declare that TLS terminates in front of this "
-                        "process, so cookies are marked Secure and HSTS is sent")
+                   help="declare that TLS terminates in FRONT of this process "
+                        "(a reverse proxy), so cookies are marked Secure and "
+                        "HSTS is sent. Use --cert/--key to serve TLS directly.")
+    p.add_argument("--cert", help="PEM certificate; serve HTTPS directly")
+    p.add_argument("--key", help="PEM private key for --cert")
     p.add_argument("--create-user", metavar="USERNAME",
                    help="create a user and exit; the password is read from "
                         "stdin so it never appears in the process list")
@@ -41,14 +45,36 @@ def main(argv=None):
         print("No users yet. Create one:\n"
               "    echo -n 'your-password' | python -m dashboard --create-user you")
 
-    server.Handler.secure = args.tls
-    httpd, port = server.bind(args.host, args.port)
-    scheme = "https" if args.tls else "http"
+    if bool(args.cert) != bool(args.key):
+        p.error("--cert and --key must be given together")
+
+    serving_tls = bool(args.cert)
+
+    ctx = None
+    if serving_tls:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        # TLS 1.2 floor: everything below it is broken, and nothing that can
+        # reach this needs it.
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        try:
+            ctx.load_cert_chain(args.cert, args.key)
+        except (OSError, ssl.SSLError) as e:
+            p.error("could not load certificate: %s" % e)
+
+    # Either we terminate TLS ourselves, or something in front of us does.
+    # Both mean the browser is on HTTPS, which decides whether the session
+    # cookie may be marked Secure -- marking it on plain HTTP makes the
+    # browser drop the cookie silently and login appears to do nothing.
+    httpd, port = server.bind(args.host, args.port, tls_context=ctx,
+                              behind_proxy_tls=args.tls)
+
+    secure = serving_tls or args.tls
+    scheme = "https" if secure else "http"
     storage.log("started on %s://%s:%d (pid %d)"
                 % (scheme, args.host, port, os.getpid()))
     print("Dashboard  ->  %s://%s:%d/" % (scheme, args.host, port))
     print("data: %s" % root)
-    if args.host not in ("127.0.0.1", "localhost") and not args.tls:
+    if args.host not in ("127.0.0.1", "localhost") and not secure:
         print("\n  ! Bound to %s without --tls. This app uses Web Crypto, which\n"
               "    browsers disable outside a secure context, so it will fail\n"
               "    to load -- and it would be serving your finances in the\n"

@@ -48,7 +48,17 @@ ROUTES = [
 class Handler(BaseHTTPRequestHandler):
     server_version = "Dashboard"
     protocol_version = "HTTP/1.1"
-    secure = False           # set True when served over TLS, for HSTS
+
+    @property
+    def secure(self):
+        """Is the browser on HTTPS?
+
+        Derived from the server rather than set as a flag, so it cannot drift
+        from reality. Getting this wrong is quiet in both directions: too low
+        and HSTS is skipped, too high and the Secure cookie is dropped by the
+        browser so login silently does nothing.
+        """
+        return bool(self.server.tls_context) or self.server.behind_proxy_tls
 
     # ── plumbing ──────────────────────────────────────────────────────────
     def log_message(self, fmt, *args):
@@ -359,14 +369,54 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, fh.read(), ctype or "application/octet-stream")
 
 
-def bind(host, preferred):
+class DashboardServer(ThreadingHTTPServer):
+    """Threading server, optionally with TLS.
+
+    The TLS handshake happens in the worker thread, not on the accept loop.
+    Wrapping the *listening* socket is the obvious approach and it is wrong:
+    accept() then performs the handshake inline, so a client that opens a TCP
+    connection without immediately sending a ClientHello blocks every other
+    connection. Browsers do exactly that -- Chrome preconnects sockets
+    speculatively -- so the symptom is that curl works perfectly and the site
+    never loads in a browser.
+    """
+
+    daemon_threads = True
+    # Python's default of 5 is small for a browser opening six connections at
+    # once plus preconnects.
+    request_queue_size = 64
+
+    # Set by bind(). Together these decide whether the browser is on HTTPS.
+    tls_context = None
+    behind_proxy_tls = False
+
+    def get_request(self):
+        sock, addr = self.socket.accept()
+        # A stalled handshake must not hold a worker thread forever.
+        sock.settimeout(30)
+        return sock, addr
+
+    def finish_request(self, request, client_address):
+        if self.tls_context is not None:
+            try:
+                request = self.tls_context.wrap_socket(request, server_side=True)
+            except (OSError, ValueError):
+                # Plain HTTP sent to a TLS port, an abandoned preconnect, or a
+                # client that gave up. None of these is worth a traceback.
+                return
+        self.RequestHandlerClass(request, client_address, self)
+
+
+def bind(host, preferred, tls_context=None, behind_proxy_tls=False):
     """Bind `preferred`, falling back to an ephemeral port if it is taken.
 
     Always reports the port actually bound, never the one asked for: passing
     0 means "any free port", and returning the request would report 0.
     """
     try:
-        httpd = ThreadingHTTPServer((host, preferred), Handler)
+        httpd = DashboardServer((host, preferred), Handler)
     except OSError:
-        httpd = ThreadingHTTPServer((host, 0), Handler)
+        httpd = DashboardServer((host, 0), Handler)
+    httpd.tls_context = tls_context
+    httpd.behind_proxy_tls = behind_proxy_tls
     return httpd, httpd.server_address[1]
