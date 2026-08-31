@@ -82,3 +82,39 @@ def test_reports_every_distinct_problem_at_once(rawbook):
     problems = ledger.check_invariants(c)
     # A checker that stops at the first fault makes repair an iterative slog.
     assert len(problems) >= 3, problems
+
+
+def test_catches_a_split_child_in_the_wrong_account(rawbook):
+    c = rawbook["conn"]
+    p = ledger.add_split(c, rawbook["checking"], "2026-01-12",
+                         [(rawbook["groceries"], -6000),
+                          (rawbook["fuel"], -4000)])
+    child = c.execute("SELECT id FROM transactions WHERE parent_id=? LIMIT 1",
+                      (p,)).fetchone()["id"]
+    c.execute("UPDATE transactions SET account_id=? WHERE id=?",
+              (rawbook["savings"], child))
+    problems = ledger.check_invariants(c)
+    assert any("different account" in x for x in problems), problems
+
+
+def test_catches_a_split_child_on_the_wrong_date(rawbook):
+    c = rawbook["conn"]
+    p = ledger.add_split(c, rawbook["checking"], "2026-01-12",
+                         [(rawbook["groceries"], -6000),
+                          (rawbook["fuel"], -4000)])
+    child = c.execute("SELECT id FROM transactions WHERE parent_id=? LIMIT 1",
+                      (p,)).fetchone()["id"]
+    c.execute("UPDATE transactions SET date='2026-03-01' WHERE id=?", (child,))
+    problems = ledger.check_invariants(c)
+    assert any("different date" in x for x in problems), problems
+
+
+def test_catches_an_orphaned_split_child(rawbook):
+    c = rawbook["conn"]
+    p = ledger.add_split(c, rawbook["checking"], "2026-01-12",
+                         [(rawbook["groceries"], -6000),
+                          (rawbook["fuel"], -4000)])
+    # Delete only the parent, as a careless direct UPDATE would.
+    c.execute("UPDATE transactions SET deleted=1 WHERE id=?", (p,))
+    problems = ledger.check_invariants(c)
+    assert any("outlived their parent" in x for x in problems), problems

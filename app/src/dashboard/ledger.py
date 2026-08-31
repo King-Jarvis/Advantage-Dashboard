@@ -227,6 +227,10 @@ def update_transaction(conn, txn_id, **fields):
     if row["reconciled"] and ("amount_cents" in fields or "date" in fields):
         raise ValueError("reconciled transactions cannot change amount or date")
 
+    has_children = conn.execute(
+        "SELECT COUNT(*) c FROM transactions WHERE parent_id=? AND deleted=0",
+        (txn_id,)).fetchone()["c"] > 0
+
     if "amount_cents" in fields:
         if not isinstance(fields["amount_cents"], int):
             raise TypeError("amount_cents must be int cents")
@@ -234,12 +238,25 @@ def update_transaction(conn, txn_id, **fields):
             conn.execute("UPDATE transactions SET amount_cents=?, updated_at=?"
                          " WHERE id=?",
                          (-fields["amount_cents"], _now(), row["transfer_id"]))
-        if row["parent_id"] is None:
-            kids = conn.execute("SELECT COUNT(*) c FROM transactions"
-                                " WHERE parent_id=? AND deleted=0",
-                                (txn_id,)).fetchone()["c"]
-            if kids:
-                raise ValueError("change the split parts, not the parent total")
+        if has_children:
+            raise ValueError("change the split parts, not the parent total")
+
+    if "date" in fields:
+        # A split is one event. Moving the parent without its children would
+        # put the money in one month and the categorised spending in another,
+        # so the envelope shows spending in a month the money never left.
+        if row["parent_id"]:
+            raise ValueError("a split part takes its date from the parent; "
+                             "move the parent instead")
+        if has_children:
+            conn.execute("UPDATE transactions SET date=?, updated_at=?"
+                         " WHERE parent_id=? AND deleted=0",
+                         (fields["date"], _now(), txn_id))
+        if row["transfer_id"]:
+            # Both halves of a transfer are one movement on one day.
+            conn.execute("UPDATE transactions SET date=?, updated_at=?"
+                         " WHERE id=?",
+                         (fields["date"], _now(), row["transfer_id"]))
 
     sets = ", ".join("%s=?" % k for k in fields)
     vals = [int(v) if k in ("cleared", "reconciled") else v
@@ -268,10 +285,18 @@ def account_balance(conn, account_id, as_of=None):
 
 
 def category_activity(conn, category_id, month):
-    """Signed movement for a category in a month. Negative means spent."""
+    """Signed movement for a category in a month. Negative means spent.
+
+    Off-budget accounts are excluded. A tracking account -- an investment or a
+    loan -- is recorded so net worth is right, not so its movements consume
+    this month's grocery money. Without this join, brokerage fees categorised
+    for reporting would silently drain a real envelope.
+    """
     return conn.execute(
-        "SELECT COALESCE(SUM(amount_cents),0) a FROM transactions"
-        " WHERE category_id=? AND deleted=0 AND substr(date,1,7)=?",
+        "SELECT COALESCE(SUM(t.amount_cents),0) a FROM transactions t"
+        " JOIN accounts a ON a.id = t.account_id"
+        " WHERE t.category_id=? AND t.deleted=0 AND a.on_budget=1"
+        "   AND substr(t.date,1,7)=?",
         (category_id, month)).fetchone()["a"]
 
 
@@ -321,7 +346,11 @@ def category_balance(conn, category_id, month):
         if m == month:
             return bal
         carry = bal if (bal >= 0 or cat["carryover_negative"]) else 0
-    return carry
+    # _months_through always includes `month`, so the loop always returns.
+    # Stating that as a failure rather than returning a plausible-looking
+    # number means a future change to _months_through cannot quietly make
+    # this function wrong.
+    raise AssertionError("unreachable: _months_through omitted %s" % month)
 
 
 def absorbed_overspend_through(conn, month):
@@ -378,16 +407,28 @@ def check_invariants(conn):
     """Return a list of violations. Empty means the ledger is internally sound."""
     bad = []
 
+    # A split child must sit in the same account and on the same date as its
+    # parent. Drift here would make the parent's money and the children's
+    # categorisation describe different events.
     for r in conn.execute(
-            "SELECT a.id, a.name, a.balance_sum, COALESCE(t.s,0) leaf_sum FROM ("
-            "  SELECT id, name, 0 balance_sum FROM accounts) a"
-            " LEFT JOIN (SELECT account_id, SUM(amount_cents) s FROM transactions"
-            "   WHERE deleted=0 AND parent_id IS NULL GROUP BY account_id) t"
-            " ON t.account_id = a.id"):
-        computed = account_balance(conn, r["id"])
-        if computed != r["leaf_sum"]:
-            bad.append("account %s: balance %d != leaf sum %d"
-                       % (r["name"], computed, r["leaf_sum"]))
+            "SELECT c.id, c.account_id c_acct, c.date c_date,"
+            "       p.account_id p_acct, p.date p_date"
+            " FROM transactions c JOIN transactions p ON p.id = c.parent_id"
+            " WHERE c.deleted=0 AND p.deleted=0"):
+        if r["c_acct"] != r["p_acct"]:
+            bad.append("split child %s is in a different account from its parent"
+                       % r["id"][:8])
+        if r["c_date"] != r["p_date"]:
+            bad.append("split child %s has a different date from its parent"
+                       % r["id"][:8])
+
+    # An orphan child -- parent deleted, child still live -- is categorised
+    # spending with no money behind it.
+    n = conn.execute("SELECT COUNT(*) c FROM transactions t"
+                     " JOIN transactions p ON p.id = t.parent_id"
+                     " WHERE t.deleted=0 AND p.deleted=1").fetchone()["c"]
+    if n:
+        bad.append("%d split child/children outlived their parent" % n)
 
     for r in conn.execute(
             "SELECT a.id a_id, a.amount_cents a_amt, b.id b_id, b.amount_cents b_amt,"
