@@ -181,7 +181,7 @@ def test_a_redated_transaction_is_caught_as_a_near_duplicate(conn, book):
     ledger.add_transaction(conn, book["acct"], "2026-08-04", -4215,
                            "TESCO STORES 3299")
     bid, _ = st.create_batch(conn, book["acct"], "aug.csv", UK)
-    row = [r for r in st.batch_rows(conn, bid) if r["line_no"] == 2][0]
+    row = next(r for r in st.batch_rows(conn, bid) if r["line_no"] == 2)
     assert row["is_duplicate"] and row["dup_kind"] == "near"
 
 
