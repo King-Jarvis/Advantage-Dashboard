@@ -2,61 +2,90 @@
 
 ## Shape
 
-Three processes: the **dashboard app** (owns the database and the OAuth tokens), **n8n**
-(scheduling and orchestration), and **Actual Budget** behind a REST wrapper.
+Two processes: the **dashboard app**, which owns the database, the ledger and
+the OAuth tokens, and **n8n**, which schedules and orchestrates.
 
-The app is the only thing that touches the database. n8n never holds Google credentials —
-it asks the app for a short-lived access token per run. The app never talks to n8n except
-by being called.
+The app is the only thing that touches the database. n8n never holds Google
+credentials — it asks the app for a short-lived access token per run.
+
+## Why the app owns the ledger
+
+The alternative was running Actual Budget underneath and syncing to it. That
+buys proven envelope math and bank feeds, at the cost of a second service and a
+repository that cannot be run without it.
+
+Owning the ledger means `git clone && docker compose up` genuinely works with no
+external dependency, and there is one SQLite file rather than a sync boundary
+between two systems. The price is that transfers, splits, reconciliation and
+month rollover are ours to get right — which is why the ledger has an invariant
+test suite and was built before anything that depends on it.
+
+If automated bank feeds are ever wanted, that is a separate integration
+(SimpleFIN or GoCardless) behind the same import path, not a reshaping of the
+schema.
 
 ## Why the app owns OAuth
 
-Two reasons. **Portability:** one `.env`, one consent flow, accounts added from the UI —
-there is no second system to configure before the thing works. **Blast radius:** refresh
-tokens live in one place, encrypted, rather than being duplicated into a workflow engine
-that also runs arbitrary user-authored code.
+**Portability:** one `.env`, one consent flow, accounts added from the UI —
+there is no second system to configure before it works. **Blast radius:**
+refresh tokens live in one encrypted place rather than being duplicated into a
+workflow engine that also runs user-authored code.
 
 ## Why an outbox
 
-Editing has to feel instant and also has to be durable. Those pull apart: a synchronous
-write to Google would make every edit wait on a network round trip, and would fail
+Editing must feel instant and also be durable. Those pull apart: a synchronous
+write to Google would make every edit wait on a round trip, and would fail
 entirely when n8n is down.
 
-So an edit writes to SQLite, marks the row `dirty`, and repaints in the same request. A row
-is appended to `outbox`. `outbox-drain` pulls pending rows every 15 seconds, applies them,
-and acks. On failure the row backs off and shows as pending in the UI rather than silently
-reverting.
+An edit writes to SQLite, marks the row `dirty`, and repaints in the same
+request. A row is appended to `outbox`. `outbox-drain` applies pending rows
+every 15 seconds and acks. On failure the row backs off and shows as pending
+rather than silently reverting.
 
-**Conflict rule:** the provider is the source of truth on every poll, *except* for rows
-with unacked outbox entries. Without that exception a poll that ran before your edge landed
-would clobber it.
+This applies to calendar and mail only. **Budget edits have no outbox** — the
+ledger is local, so a budget write is simply a database write. That is a direct
+benefit of owning the ledger: no round trip, no reconciliation, no divergence.
+
+**Conflict rule** (calendar and mail): the provider is the source of truth on
+every poll, *except* rows with unacked outbox entries. Without that exception a
+poll that ran before your edit landed would clobber it.
 
 ## Why SQLite, and where the limit is
 
-One writer (the app), tiny volumes, and a dependency-free driver in the standard library.
-WAL mode allows concurrent readers.
+One writer, modest volume, and a driver in the standard library. WAL allows
+concurrent readers.
 
-The limit is a second writer. If something else ever needs to write — a second app
-instance, or Grafana doing more than reading — that is the point to move to Postgres, not
-before.
+The limit is a second writer. If one ever appears, that is the point to move to
+Postgres — not before.
 
 ## Why polling rather than push
 
 Google delivers push notifications only to a public HTTPS endpoint with a valid
-certificate. Keeping the deployment private means polling: 30 seconds for calendar and
-mail, 60 for budget, 15 for the outbox.
+certificate. Keeping the deployment private means polling: 30 seconds for
+calendar and mail, 15 for the outbox.
 
-The browser is still live. SSE pushes changes to open tabs the moment they land, so the
-page never needs refreshing even though the data underneath arrives on a timer.
+The browser is still live. SSE pushes changes to open tabs the moment they
+land, so the page never needs refreshing even though the data arrives on a
+timer.
 
-If sub-second inbound ever matters, a tunnel providing public HTTPS is the upgrade and only
-the trigger nodes change.
+## The ledger
 
-## Data separation
+Three transaction shapes share one table, distinguished by two columns:
 
-`transactions` mirrors Actual and is the live ledger. `history_txns` holds imported
-statement history from before the budget's start date and never reaches Actual.
+| Shape | `parent_id` | `transfer_id` | Category |
+|---|---|---|---|
+| Plain | NULL | NULL | optional |
+| Transfer | NULL | paired row's id | always NULL |
+| Split parent | NULL | NULL | always NULL |
+| Split child | parent's id | NULL | required |
 
-They are separate tables on purpose. Merging them would make it impossible to tell what
-Actual believes from what was inferred from a statement, and the budget engine needs to
-know the difference.
+**Account balance counts rows with `parent_id IS NULL` only.** The parent
+carries the money; children carry only the categorisation. Counting both is the
+classic way split handling doubles someone's spending.
+
+**A transfer is never categorised.** Moving your own money between accounts is
+not expenditure, and treating it as such is the classic way a budget invents
+spending that never happened.
+
+Deletion is soft throughout. A ledger that forgets is not auditable, and undo
+on a money operation is not optional.

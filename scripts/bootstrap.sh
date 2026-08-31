@@ -3,7 +3,7 @@
 #
 # Secrets are files, not environment variables. An env var is visible to anyone
 # who can run `docker inspect` or read /proc/<pid>/environ; a file mounted at
-# /run/secrets is not. Both actual-http-api and this app read the *_PATH form.
+# /run/secrets is not. The app reads the *_PATH form of each.
 #
 # Idempotent: an existing secret is never overwritten, so re-running after
 # adding a new service generates only what is missing. Rotating means deleting
@@ -73,8 +73,6 @@ echo
 gen ingest_key      "n8n -> app authentication"
 gen session_key     "signs session cookies"
 gen token_key       "encrypts OAuth tokens at rest" "openssl rand -base64 32"
-gen actual_api_key  "clients -> actual-http-api"
-gen actual_password "set this same value in Actual's UI on first run"
 
 placeholder google_client_secret "paste from Google Cloud -> Credentials"
 placeholder anthropic_api_key    "paste from console.anthropic.com"
@@ -89,20 +87,12 @@ echo
 echo "$created created, $kept kept"
 echo
 cat <<NEXT
+
 Next:
 
-  1. Start Actual, open it, and set its password to the value in
-     actual_password:
-
-         cat $DIR/actual_password
-
-     actual-http-api authenticates to Actual with that value, so they must
-     match or the wrapper cannot read your budget.
-
-  2. Fill the two EMPTY files above. Until google_client_secret has a value,
+  1. Fill the two EMPTY files above. Until google_client_secret has a value,
      Google sign-in and account connection will not work.
 
-  3. Never commit this directory. It is gitignored, and CI rejects any file
-     under deploy/secrets other than .gitkeep -- but the check only helps if
-     the ignore rule was in place first, which it is.
+  2. Never commit this directory. It is gitignored, and CI rejects any file
+     under deploy/secrets other than .gitkeep.
 NEXT

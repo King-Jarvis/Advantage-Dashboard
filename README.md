@@ -15,9 +15,10 @@ without leaving the page.
 things that actually want you. Archive, star, label, and correct the score when it's wrong;
 corrections are kept separately so they survive re-classification.
 
-**Budget** — envelope budgeting backed by [Actual Budget](https://actualbudget.org/).
-Assign and cover, or drag money between envelopes. Import bank statements — including
-years of history — and get a suggested budget drawn over your actual spending.
+**Budget** — zero-based envelope budgeting with its own ledger: accounts,
+transactions, transfers, splits and reconciliation, all local. Assign and cover, or drag
+money between envelopes. Import bank statements — including years of history — and get a
+suggested budget drawn over your real spending.
 
 ## How the suggestion works
 
@@ -47,7 +48,6 @@ confidence. Below three covered months it declines to guess instead of bluffing.
 │  n8n — scheduler & orchestrator              │
 └──────────────────────────────────────────────┘
      └── Google APIs ───────────────┘
-     └── Actual Budget ─────────────┘
 ```
 
 The app is the only thing that touches the database and the only holder of refresh tokens.
@@ -57,7 +57,7 @@ pending rather than silently reverted.
 
 ## Getting started
 
-Requires Docker, a Google Cloud project, and an Actual Budget instance.
+Requires Docker and a Google Cloud project. Nothing else.
 
 ```bash
 cp .env.example .env        # then edit it

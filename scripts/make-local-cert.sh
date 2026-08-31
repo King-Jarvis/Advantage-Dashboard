@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Generate a local CA and a server certificate for LAN access over HTTPS.
 #
-# Why this is needed rather than optional: Actual (and this dashboard) use Web
-# Crypto, which browsers expose only in a "secure context" -- HTTPS, or
-# localhost. Served over plain HTTP at a LAN address the app loads and then
-# dies with an opaque error, because crypto.subtle is simply undefined. So
-# HTTPS is a functional requirement here, not only a security one.
+# Why this is needed rather than optional: the dashboard uses Web Crypto,
+# which browsers expose only in a "secure context" -- HTTPS, or localhost.
+# Served over plain HTTP at a LAN address, crypto.subtle is simply undefined
+# and the app fails with an opaque error. HTTPS is a functional requirement
+# here, not only a security one.
 #
 # Two files matter:
 #   ca.crt      install once per device -> no browser warnings anywhere
