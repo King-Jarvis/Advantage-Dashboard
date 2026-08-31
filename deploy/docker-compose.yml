@@ -1,0 +1,74 @@
+# Portable deployment. Everything host-specific comes from .env — see
+# .env.example. Run scripts/bootstrap.sh first to generate deploy/secrets/.
+#
+# To add these services to an existing stack instead, copy the service blocks
+# and the top-level networks/secrets sections into your compose file. Remember
+# that any existing service which needs to reach actual-api must also join
+# dashboard_back, and must list `default` explicitly to keep its current
+# connectivity.
+
+services:
+  actual:
+    image: actualbudget/actual-server:26.8.1
+    container_name: actual
+    volumes:
+      - ${DATA_ROOT}/actual:/data
+    networks:
+      - dashboard_back
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  actual-api:
+    # Actual ships a Node library, not a REST API. This community wrapper is
+    # what lets anything else read and write the budget over HTTP.
+    #
+    # Pinned deliberately: it tracks Actual's releases and can lag a breaking
+    # change, so :latest would upgrade it out from under a working stack.
+    image: jhonderson/actual-http-api:26.8.1
+    container_name: actual-api
+    environment:
+      # NODE_ENV=production is load-bearing, not cosmetic. The api-key
+      # middleware reads:
+      #   if ((!apiKey || config.apiKey != apiKey) && config.nodeEnv == 'production')
+      # Without it the check no-ops and every budget route is readable AND
+      # writable by anything that can reach port 5007. The upstream README's
+      # example `docker run` does not set it. Verified on 26.8.1.
+      - NODE_ENV=production
+      # The month-category PATCH and categorytransfers endpoints this project
+      # depends on are flagged "extended". They default to on; set explicitly so
+      # a future default change shows up here rather than as a mystery 404.
+      - EXPERIMENTAL_OPERATIONS_ENABLED=true
+      - ACTUAL_SERVER_URL=http://actual:5006/
+      - ACTUAL_SERVER_PASSWORD_PATH=/run/secrets/actual_password
+      - API_KEY_PATH=/run/secrets/actual_api_key
+    secrets:
+      - actual_password
+      - actual_api_key
+    volumes:
+      - ${DATA_ROOT}/actual-api:/data
+    networks:
+      - dashboard_back
+    depends_on:
+      - actual
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+networks:
+  dashboard_back:
+    driver: bridge
+    # No gateway. Neither service needs egress: Actual is a local budget
+    # server and the wrapper only ever talks to Actual. Note that Docker
+    # silently ignores `ports:` on an internal network — it accepts the
+    # directive and creates no mapping — so reach these through a reverse
+    # proxy attached to this network, not a published port.
+    internal: true
+
+secrets:
+  # Files, not environment values. An env var is visible in `docker inspect`
+  # and /proc/<pid>/environ; a file mounted at /run/secrets is not.
+  actual_password:
+    file: ./secrets/actual_password
+  actual_api_key:
+    file: ./secrets/actual_api_key

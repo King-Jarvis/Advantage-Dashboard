@@ -66,3 +66,70 @@ rather than silently absent.
 
 `POST /api/auth/login` · `POST /api/auth/logout` · `GET /api/auth/google/start` ·
 `GET /api/auth/google/callback` · `GET /api/auth/google/connect`
+
+---
+
+## Actual Budget wrapper — pinned from the running service
+
+Verified against `jhonderson/actual-http-api:26.8.1` by reading
+`/api-docs/swagger.json` from inside the container. Base path is **`/v1`** — a
+detail absent from the README, and the cause of a confusing 404 if missed.
+
+Auth header is `x-api-key`.
+
+| Need | Endpoint |
+|---|---|
+| List transactions | `GET /v1/budgets/{syncId}/accounts/{accountId}/transactions` |
+| Edit a transaction | `PATCH /v1/budgets/{syncId}/transactions/{transactionId}` |
+| Add a transaction | `POST /v1/budgets/{syncId}/accounts/{accountId}/transactions` |
+| **Import a statement** | `POST /v1/budgets/{syncId}/accounts/{accountId}/transactions/import` |
+| Month envelopes | `GET /v1/budgets/{syncId}/months/{month}/categories` |
+| **Set an envelope** | `PATCH /v1/budgets/{syncId}/months/{month}/categories/{categoryId}` |
+| **Move money** | `POST /v1/budgets/{syncId}/months/{month}/categorytransfers` |
+| Categories | `GET|POST /v1/budgets/{syncId}/categories` |
+| Payees | `GET|POST /v1/budgets/{syncId}/payees` |
+| Arbitrary query | `POST /v1/budgets/{syncId}/run-query` (ActualQL) |
+
+Request bodies, as pinned:
+
+```jsonc
+// PATCH months/{month}/categories/{categoryId}
+{ "category": { "budgeted": 12345, "carryover": false } }   // integer cents
+
+// POST months/{month}/categorytransfers  — the native move-money primitive
+{ "categorytransfer": { "fromCategoryId": "...", "toCategoryId": "...", "amount": 5000 } }
+
+// POST accounts/{accountId}/transactions/import
+{ "transactions": [ { "date": "2026-08-01", "amount": -1234,
+                      "payee_name": "...", "imported_id": "...", "notes": "" } ],
+  "dryRun": true, "defaultCleared": true, "reimportDeleted": false }
+```
+
+Two findings that shape the implementation:
+
+- **`dryRun`** lets the import review screen ask Actual exactly what it *would*
+  do before anything is committed. Use it to render the review, then re-post
+  with `dryRun: false` on confirm.
+- **`imported_id`** is Actual's own deduplication key. Set it to a stable hash
+  of (date, amount, normalised payee) so Actual dedupes independently of our
+  own duplicate detection — two mechanisms, not one.
+
+### Authentication is conditional — read this
+
+The api-key middleware only rejects when `NODE_ENV === 'production'`:
+
+```js
+if ((!apiKey || config.apiKey != apiKey) && config.nodeEnv == 'production') {
+  res.status(403).json({"error": "Forbidden"});
+}
+```
+
+Without that variable the check silently passes everything. The upstream
+README's example `docker run` does not set it, so the default deployment
+exposes a financial API with **no authentication at all**. The compose file
+sets it and there is a test asserting a wrong key is rejected.
+
+`authorizeRequest` is mounted on `/budgets/:budgetSyncId`, so the bare
+`GET /v1/budgets` listing is **not** authenticated even with `NODE_ENV` set. It
+returns budget names and sync IDs. Keep the wrapper on the internal network and
+never proxy that path publicly.
