@@ -130,6 +130,19 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 CREATE INDEX IF NOT EXISTS ix_sessions_user ON sessions(user_id);
 
+-- ── OAuth in flight ──────────────────────────────────────────────────────
+-- One row per authorisation attempt, deleted the moment it is used. Kept in
+-- the database rather than in memory so a restart mid-flow fails closed
+-- rather than losing the verifier and leaving the user at a broken callback.
+CREATE TABLE IF NOT EXISTS oauth_pending (
+    state         TEXT PRIMARY KEY,
+    code_verifier TEXT NOT NULL,
+    purpose       TEXT NOT NULL,          -- 'signin' | 'connect'
+    return_to     TEXT NOT NULL DEFAULT '/',
+    created_at    TEXT NOT NULL,
+    expires_at    TEXT NOT NULL
+);
+
 -- ── Audit ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS audit_log (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,

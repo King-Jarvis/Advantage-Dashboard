@@ -1,0 +1,93 @@
+/* Design tokens.
+ *
+ * The visual language borrows n8n's: a dark canvas with a dot grid, content
+ * carried on node-like cards with a coloured left bar, and coral as the one
+ * brand accent. What is kept from the earlier direction is the discipline
+ * rather than the palette -- one spacing scale used everywhere, generous
+ * whitespace, and saturation rationed so colour always means something.
+ *
+ * There is no light theme. This is a dashboard that sits open on a screen,
+ * and maintaining two palettes for a single-operator tool is cost without
+ * a reader.
+ */
+
+:root {
+  /* ── Brand ──────────────────────────────────────────────────────────── */
+  --brand:          #ea4b71;   /* n8n coral: primary actions, active state */
+  --brand-hover:    #f26185;
+  --brand-press:    #c93d5e;
+  --brand-tint:     rgba(234, 75, 113, 0.12);
+  --brand-edge:     rgba(234, 75, 113, 0.35);
+
+  /* ── Canvas and surfaces ────────────────────────────────────────────── */
+  --canvas:         #15171c;   /* the gridded ground everything sits on */
+  --canvas-dot:     #23272f;   /* the grid itself: felt, not read */
+  --surface:        #1c1f26;   /* node body */
+  --surface-2:      #22262e;   /* raised: inputs, hovered rows */
+  --surface-3:      #2a2f39;
+  --line:           #2b303a;   /* hairline */
+  --line-lit:       #3a414e;   /* hairline that carries meaning */
+
+  /* ── Ink ────────────────────────────────────────────────────────────── */
+  --text:           #e8eaee;
+  --text-2:         #a7aeba;
+  --text-3:         #737b88;
+  --text-4:         #4d545f;   /* dormant; never used for anything readable */
+
+  /* ── State ──────────────────────────────────────────────────────────── */
+  /* Each means exactly one thing. A green that also means "selected" stops
+   * meaning "healthy", and then the screen cannot be read at a glance. */
+  --ok:             #35b67f;   /* healthy, funded, connected */
+  --ok-tint:        rgba(53, 182, 127, 0.12);
+  --warn:           #e0a03c;   /* needs attention, underfunded, stale */
+  --warn-tint:      rgba(224, 160, 60, 0.12);
+  --danger:         #e4574c;   /* overspent, failed, destructive */
+  --danger-tint:    rgba(228, 87, 76, 0.12);
+  --info:           #4a9eff;   /* informational, transfers, links */
+  --info-tint:      rgba(74, 158, 255, 0.12);
+
+  /* ── Node accents ───────────────────────────────────────────────────── */
+  /* n8n colours a node by what it does. Same idea: a surface's left bar says
+   * which part of your life it belongs to, before you read the heading. */
+  --node-agenda:    #7d6cf0;
+  --node-inbox:     #4a9eff;
+  --node-budget:    #35b67f;
+  --node-system:    #737b88;
+
+  /* ── Spacing ────────────────────────────────────────────────────────── */
+  /* One scale. Any padding or gap not from this list is a mistake. */
+  --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 16px;
+  --s5: 24px; --s6: 32px; --s7: 48px; --s8: 64px;
+
+  /* ── Shape ──────────────────────────────────────────────────────────── */
+  --r-sm: 4px;  --r: 8px;  --r-lg: 12px;  --r-pill: 999px;
+  --bar: 3px;                 /* the node's left accent bar */
+
+  /* ── Type ───────────────────────────────────────────────────────────── */
+  /* System stack: no webfont means no external request, which the content
+   * security policy forbids anyway, and nothing to wait for on first paint. */
+  --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+          "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "JetBrains Mono", "SFMono-Regular", Menlo,
+          "DejaVu Sans Mono", monospace;
+
+  --t-micro: 11px; --t-label: 12px; --t-body: 14px;
+  --t-lg: 17px;    --t-xl: 22px;    --t-hero: 34px;
+
+  --track: 0.08em;            /* letter-spacing for small caps labels */
+
+  /* ── Motion ─────────────────────────────────────────────────────────── */
+  --fast: 120ms; --slow: 200ms; --ease: cubic-bezier(0.2, 0, 0.2, 1);
+
+  --shadow:    0 1px 2px rgba(0,0,0,.4), 0 4px 12px rgba(0,0,0,.25);
+  --shadow-lg: 0 8px 32px rgba(0,0,0,.45);
+}
+
+/* Respect the setting. Motion here is decoration; nothing depends on it. */
+@media (prefers-reduced-motion: reduce) {
+  :root { --fast: 0ms; --slow: 0ms; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

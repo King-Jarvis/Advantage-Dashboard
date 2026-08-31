@@ -1,0 +1,280 @@
+/* Components.
+ *
+ * No inline styles anywhere: the content security policy has no
+ * 'unsafe-inline', so a style="..." attribute silently does nothing. That is
+ * deliberate -- the same policy is what stops injected markup executing.
+ */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0; padding: 0; height: 100%;
+  background: var(--canvas);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: var(--t-body);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* The canvas. n8n's dot grid, at low contrast -- felt rather than read. It
+ * scrolls with the content so the page feels like a surface you move across
+ * rather than a document that slides under a texture. */
+body {
+  background-image: radial-gradient(var(--canvas-dot) 1px, transparent 1px);
+  background-size: 22px 22px;
+  background-position: -1px -1px;
+}
+
+a { color: var(--info); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+/* ── Layout ─────────────────────────────────────────────────────────────── */
+.app { display: flex; flex-direction: column; min-height: 100%; }
+
+.topbar {
+  display: flex; align-items: center; gap: var(--s4);
+  padding: var(--s3) var(--s5);
+  background: rgba(21, 23, 28, 0.85);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; z-index: 10;
+}
+
+.brandmark {
+  display: flex; align-items: center; gap: var(--s2);
+  font-weight: 600; letter-spacing: var(--track);
+  text-transform: uppercase; font-size: var(--t-label);
+}
+.brandmark .dot {
+  width: 9px; height: 9px; border-radius: var(--r-pill);
+  background: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-tint);
+}
+
+.tabs { display: flex; gap: var(--s1); margin-left: var(--s5); }
+.tab {
+  padding: var(--s2) var(--s3);
+  border-radius: var(--r-sm);
+  color: var(--text-3);
+  font-size: var(--t-label); font-weight: 500;
+  background: none; border: 0; cursor: pointer;
+  font-family: inherit;
+  transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.tab:hover { color: var(--text); background: var(--surface-2); }
+.tab[aria-current="page"] { color: var(--text); background: var(--surface-3); }
+
+.spacer { flex: 1; }
+.canvas { padding: var(--s5); max-width: 1400px; width: 100%; margin: 0 auto; }
+
+.row { display: flex; align-items: center; gap: var(--s3); }
+.col { display: flex; flex-direction: column; gap: var(--s3); }
+.grid {
+  display: grid; gap: var(--s4);
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
+/* ── Node ───────────────────────────────────────────────────────────────── */
+/* The unit of the interface. A rounded surface with a coloured left bar
+ * saying which part of your life it belongs to, readable before the heading. */
+.node {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.node::before {
+  content: ""; position: absolute; inset: 0 auto 0 0;
+  width: var(--bar); background: var(--node-system);
+}
+.node[data-kind="agenda"]::before { background: var(--node-agenda); }
+.node[data-kind="inbox"]::before  { background: var(--node-inbox); }
+.node[data-kind="budget"]::before { background: var(--node-budget); }
+
+.node-head {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: var(--s3) var(--s4) var(--s3) calc(var(--s4) + var(--bar));
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.node-title {
+  font-size: var(--t-label); font-weight: 600;
+  letter-spacing: var(--track); text-transform: uppercase;
+  color: var(--text-2);
+}
+.node-body { padding: var(--s4) var(--s4) var(--s4) calc(var(--s4) + var(--bar)); }
+.node-body.flush { padding: 0 0 0 var(--bar); }
+
+/* Connectors between nodes, drawn in SVG. n8n's bezier, muted so the eye
+ * follows structure without the lines competing with content. */
+.wires { position: absolute; inset: 0; pointer-events: none; z-index: 0; }
+.wires path { fill: none; stroke: var(--line-lit); stroke-width: 1.5; }
+.wires path.live { stroke: var(--brand-edge); }
+
+/* ── Pills and dots ─────────────────────────────────────────────────────── */
+.pill {
+  display: inline-flex; align-items: center; gap: var(--s1);
+  padding: 2px var(--s2); border-radius: var(--r-pill);
+  font-size: var(--t-micro); font-weight: 600;
+  letter-spacing: var(--track); text-transform: uppercase;
+  background: var(--surface-3); color: var(--text-2);
+}
+.pill.ok     { background: var(--ok-tint);     color: var(--ok); }
+.pill.warn   { background: var(--warn-tint);   color: var(--warn); }
+.pill.danger { background: var(--danger-tint); color: var(--danger); }
+.pill.info   { background: var(--info-tint);   color: var(--info); }
+.pill.brand  { background: var(--brand-tint);  color: var(--brand); }
+
+.status-dot {
+  width: 7px; height: 7px; border-radius: var(--r-pill);
+  background: var(--text-4); flex: none;
+}
+.status-dot.ok { background: var(--ok); }
+.status-dot.warn { background: var(--warn); }
+.status-dot.danger { background: var(--danger); }
+
+/* ── Type helpers ───────────────────────────────────────────────────────── */
+.label {
+  font-size: var(--t-label); letter-spacing: var(--track);
+  text-transform: uppercase; color: var(--text-3); font-weight: 500;
+}
+.muted { color: var(--text-3); }
+.hint { font-size: var(--t-micro); color: var(--text-4); }
+
+/* Money is always monospaced and tabular so digits line up in a column and a
+ * wrong magnitude is visible at a glance rather than needing to be read. */
+.money {
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+.money.neg { color: var(--danger); }
+.money.pos { color: var(--ok); }
+.money.big { font-size: var(--t-xl); }
+.money.hero { font-size: var(--t-hero); font-weight: 600; }
+
+/* ── Controls ───────────────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: var(--s2);
+  min-height: 36px; padding: var(--s2) var(--s4);
+  border-radius: var(--r-sm); border: 1px solid var(--line-lit);
+  background: var(--surface-2); color: var(--text);
+  font-family: inherit; font-size: var(--t-body); font-weight: 500;
+  cursor: pointer;
+  transition: background var(--fast) var(--ease),
+              border-color var(--fast) var(--ease);
+}
+.btn:hover { background: var(--surface-3); border-color: var(--text-4); }
+.btn:active { transform: translateY(1px); }
+.btn[disabled] { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+.btn.primary {
+  background: var(--brand); border-color: var(--brand); color: #fff;
+}
+.btn.primary:hover { background: var(--brand-hover); border-color: var(--brand-hover); }
+.btn.primary:active { background: var(--brand-press); }
+
+.btn.ghost { background: transparent; border-color: transparent; color: var(--text-2); }
+.btn.ghost:hover { background: var(--surface-2); color: var(--text); }
+
+.btn.danger { color: var(--danger); border-color: transparent; background: transparent; }
+.btn.danger:hover { background: var(--danger-tint); }
+
+/* Touch targets. The dashboard is checked on a phone as often as a desktop. */
+@media (pointer: coarse) { .btn, .tab { min-height: 44px; } }
+
+.input {
+  width: 100%; min-height: 38px;
+  padding: var(--s2) var(--s3);
+  background: var(--surface-2); color: var(--text);
+  border: 1px solid var(--line-lit); border-radius: var(--r-sm);
+  font-family: inherit; font-size: var(--t-body);
+}
+.input:focus { border-color: var(--brand); outline: none; }
+.input::placeholder { color: var(--text-4); }
+
+/* ── Google sign-in ─────────────────────────────────────────────────────── */
+/* Google's own guidance: their mark on a neutral surface, never recoloured
+ * or placed on the brand accent. The mark is inline SVG rather than a remote
+ * image because the content security policy allows no external origins. */
+.btn-google {
+  width: 100%; min-height: 44px;
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: var(--s3);
+  background: #fff; color: #1f1f1f;
+  border: 1px solid #dadce0; border-radius: var(--r-sm);
+  font-family: inherit; font-size: 15px; font-weight: 500;
+  cursor: pointer;
+  transition: box-shadow var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.btn-google:hover { background: #f7f8f8; box-shadow: var(--shadow); }
+.btn-google svg { width: 18px; height: 18px; flex: none; }
+
+/* ── Login ──────────────────────────────────────────────────────────────── */
+.login-wrap {
+  min-height: 100%; display: grid; place-items: center; padding: var(--s5);
+}
+.login {
+  width: 100%; max-width: 380px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r-lg); box-shadow: var(--shadow-lg);
+  padding: var(--s6);
+}
+.login h1 {
+  margin: 0 0 var(--s2); font-size: var(--t-xl); font-weight: 600;
+}
+.login .sub { margin: 0 0 var(--s5); color: var(--text-3); font-size: var(--t-body); }
+.login .field { margin-bottom: var(--s3); }
+.login .field label { display: block; margin-bottom: var(--s1); }
+
+.divider {
+  display: flex; align-items: center; gap: var(--s3);
+  margin: var(--s5) 0; color: var(--text-4); font-size: var(--t-micro);
+  letter-spacing: var(--track); text-transform: uppercase;
+}
+.divider::before, .divider::after {
+  content: ""; flex: 1; height: 1px; background: var(--line);
+}
+
+.error {
+  padding: var(--s2) var(--s3); border-radius: var(--r-sm);
+  background: var(--danger-tint); color: var(--danger);
+  font-size: var(--t-label); margin-bottom: var(--s3);
+}
+.error:empty { display: none; }
+
+/* ── Lists ──────────────────────────────────────────────────────────────── */
+.list { display: flex; flex-direction: column; }
+.item {
+  display: flex; align-items: center; gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  border-bottom: 1px solid var(--line);
+}
+.item:last-child { border-bottom: 0; }
+.item:hover { background: var(--surface-2); }
+.item .grow { flex: 1; min-width: 0; }
+/* Untrusted text -- payees, subjects -- must not be able to blow out the
+ * layout by being long or unbroken. */
+.item .grow > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.empty {
+  padding: var(--s7) var(--s4); text-align: center; color: var(--text-3);
+}
+.empty .big { font-size: var(--t-lg); color: var(--text-2); margin-bottom: var(--s2); }
+
+/* ── Responsive ─────────────────────────────────────────────────────────── */
+@media (max-width: 720px) {
+  .canvas { padding: var(--s3); }
+  .topbar { padding: var(--s2) var(--s3); flex-wrap: wrap; }
+  .tabs { margin-left: 0; width: 100%; overflow-x: auto; }
+  .grid { grid-template-columns: 1fr; }
+}

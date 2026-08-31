@@ -16,7 +16,7 @@ import urllib.parse
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import auth, security, storage
+from . import auth, auth_google, security, storage
 
 PACKAGE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(PACKAGE, "static")
@@ -37,6 +37,9 @@ ROUTES = [
     ("logout",   {"POST"},        re.compile(r"^/api/auth/logout$"),       "session"),
     ("whoami",   {"GET"},         re.compile(r"^/api/auth/whoami$"),       "session"),
     ("health",   {"GET"},         re.compile(r"^/api/health$"),            "none"),
+    ("config",   {"GET"},         re.compile(r"^/api/config$"),            "none"),
+    ("g_start",  {"GET"},         re.compile(r"^/api/auth/google/start$"),    "none"),
+    ("g_cb",     {"GET"},         re.compile(r"^/api/auth/google/callback$"), "none"),
     ("accounts", {"GET", "POST"}, re.compile(r"^/api/accounts$"),          "session"),
     ("budget",   {"GET"},         re.compile(r"^/api/view/budget$"),       "session"),
 ]
@@ -56,6 +59,12 @@ class Handler(BaseHTTPRequestHandler):
         storage.log("http error: " + (fmt % args))
 
     def handle_one_request(self):
+        # One handler instance serves every request on a keep-alive
+        # connection, so per-request state must be reset here. Leaving _sent
+        # True from the previous response makes the next request look already
+        # answered, and nothing is written -- the browser then waits forever
+        # on a connection that will never speak again.
+        self._sent = False
         # A handler thread that dies takes its connection with it, which the
         # browser experiences as the page hanging. Log it instead.
         try:
@@ -189,6 +198,82 @@ class Handler(BaseHTTPRequestHandler):
     # ── endpoints ─────────────────────────────────────────────────────────
     def api_health(self, conn, session):
         self.json_out({"status": "ok"})
+
+    def api_config(self, conn, session):
+        """What the sign-in page needs to know before anyone is signed in.
+
+        Deliberately says only whether Google sign-in is *available* -- never
+        the client id, and never anything about which accounts exist.
+        """
+        self.json_out({"google_enabled": auth_google.configured()})
+
+    def _redirect(self, location, extra=None):
+        headers = {"Location": location}
+        headers.update(extra or {})
+        self._send(303, b"", "text/plain", headers)
+
+    def api_g_start(self, conn, session):
+        try:
+            url = auth_google.begin(
+                conn, purpose="signin",
+                return_to=(self.query().get("return_to") or ["/"])[0])
+        except auth_google.OAuthError as e:
+            return self.fail(503, str(e))
+        self._redirect(url)
+
+    def api_g_cb(self, conn, session):
+        q = self.query()
+        if q.get("error"):
+            # The user declined, or Google refused. Neither is an error worth
+            # a stack trace; send them back to a page that makes sense.
+            return self._redirect("/?auth=denied")
+
+        state = (q.get("state") or [""])[0]
+        code = (q.get("code") or [""])[0]
+        pending = auth_google.take_pending(conn, state)
+        if pending is None or not code:
+            # Unknown, replayed or expired state. Say nothing specific.
+            return self._redirect("/?auth=failed")
+
+        try:
+            tokens = auth_google.exchange(code, pending["code_verifier"])
+            info = auth_google.identity(tokens["access_token"])
+        except auth_google.OAuthError:
+            storage.log("google callback: exchange or userinfo failed")
+            return self._redirect("/?auth=failed")
+
+        sub = info["sub"]
+        allowed = auth_google.allowed_subs()
+        if sub not in allowed:
+            # Logged so the operator can copy the id into ALLOWED_GOOGLE_SUBS.
+            # The email is deliberately not logged.
+            storage.log("google sign-in refused for sub=%s (not in "
+                        "ALLOWED_GOOGLE_SUBS)" % sub)
+            return self._redirect("/?auth=notallowed")
+
+        row = conn.execute("SELECT id FROM users WHERE google_sub=?",
+                           (sub,)).fetchone()
+        if row is None:
+            username = info.get("email") or ("google:" + sub)
+            existing = conn.execute("SELECT id FROM users WHERE username=?",
+                                    (username,)).fetchone()
+            if existing:
+                conn.execute("UPDATE users SET google_sub=? WHERE id=?",
+                             (sub, existing["id"]))
+                conn.commit()
+                user_id = existing["id"]
+            else:
+                user_id = auth.create_user(conn, username, google_sub=sub)
+        else:
+            user_id = row["id"]
+
+        sid, _csrf = auth.create_session(
+            conn, user_id, ip=self.client_address[0],
+            user_agent=self.headers.get("User-Agent", ""))
+        self._redirect(auth_google.safe_return_to(pending["return_to"]), {
+            "Set-Cookie": security.cookie(
+                SESSION_COOKIE, sid, secure=self.secure,
+                max_age=auth.SESSION_ABSOLUTE_DAYS * 86400)})
 
     def api_login(self, conn, session):
         data = self.body_json()

@@ -1,1 +1,19 @@
-<h1>Dashboard</h1>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Dashboard</title>
+<link rel="stylesheet" href="/design-tokens.css">
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="data:,">
+</head>
+<body>
+<div id="root" class="app"></div>
+<!-- No inline script: the content security policy has no 'unsafe-inline',
+     which is what stops injected markup executing. Everything loads as a
+     module from this origin. -->
+<script type="module" src="/app.js"></script>
+</body>
+</html>

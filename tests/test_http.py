@@ -233,3 +233,99 @@ def test_csrf_compare_rejects_empties():
     assert not security.csrf_ok("x", None)
     assert security.csrf_ok("token", "token")
     assert not security.csrf_ok("token", "token ")
+
+
+# ── Google sign-in routes ─────────────────────────────────────────────────
+def test_config_reports_google_off_when_unconfigured(live, monkeypatch):
+    monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
+    status, _, body = call(live, "GET", "/api/config")
+    assert status == 200 and body["google_enabled"] is False
+
+
+def test_config_never_leaks_the_client_id(live, monkeypatch):
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid.apps.googleusercontent.com")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "shh")
+    _, _, body = call(live, "GET", "/api/config")
+    assert body == {"google_enabled": True}, "config should say only whether, not what"
+
+
+def test_google_start_is_unavailable_when_unconfigured(live, monkeypatch):
+    for k in ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET",
+              "GOOGLE_CLIENT_SECRET_PATH"):
+        monkeypatch.delenv(k, raising=False)
+    status, _, _ = call(live, "GET", "/api/auth/google/start")
+    assert status == 503
+
+
+def test_google_start_redirects_to_google(live, monkeypatch):
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid.apps.googleusercontent.com")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "shh")
+    monkeypatch.setenv("BASE_URL", "https://dash.example")
+    status, h, _ = call(live, "GET", "/api/auth/google/start")
+    assert status == 303
+    loc = h["Location"]
+    assert loc.startswith("https://accounts.google.com/")
+    assert "code_challenge_method=S256" in loc
+    assert "client_secret" not in loc, "the secret must never reach the browser"
+
+
+def test_callback_with_a_denial_lands_somewhere_sensible(live):
+    status, h, _ = call(live, "GET",
+                        "/api/auth/google/callback?error=access_denied")
+    assert status == 303 and h["Location"] == "/?auth=denied"
+
+
+def test_callback_with_an_unknown_state_is_refused(live):
+    # A replayed or forged callback must not authenticate anyone.
+    status, h, _ = call(live, "GET",
+                        "/api/auth/google/callback?code=x&state=never-issued")
+    assert status == 303 and h["Location"] == "/?auth=failed"
+    assert "Set-Cookie" not in h, "a failed callback must not open a session"
+
+
+def test_callback_without_a_code_is_refused(live):
+    status, h, _ = call(live, "GET", "/api/auth/google/callback?state=abc")
+    assert status == 303 and h["Location"] == "/?auth=failed"
+
+
+# ── connection reuse ──────────────────────────────────────────────────────
+def test_several_requests_on_one_connection(live):
+    """HTTP/1.1 keep-alive: one handler instance serves the whole connection.
+
+    Per-request state has to be reset for each, or the second request looks
+    already-answered, nothing is written, and the browser waits forever on a
+    connection that will never speak again. Every other test here opens a
+    fresh connection, so only this one sees it.
+    """
+    c = http.client.HTTPConnection("127.0.0.1", live, timeout=5)
+    for path in ("/api/health", "/", "/app.js", "/api/health", "/styles.css"):
+        c.request("GET", path)
+        r = c.getresponse()
+        r.read()
+        assert r.status == 200, path
+        assert r.getheader("Content-Security-Policy"), path
+    c.close()
+
+
+def test_static_then_api_on_one_connection(live):
+    # The original failure was specific to a static response followed by
+    # anything else: the API path happened to mask it.
+    c = http.client.HTTPConnection("127.0.0.1", live, timeout=5)
+    c.request("GET", "/app.js")
+    c.getresponse().read()
+    c.request("GET", "/api/health")
+    r = c.getresponse()
+    body = r.read()
+    assert r.status == 200 and b"ok" in body
+    c.close()
+
+
+def test_a_404_does_not_poison_the_connection(live):
+    c = http.client.HTTPConnection("127.0.0.1", live, timeout=5)
+    c.request("GET", "/no-such-file.js")
+    assert c.getresponse().read() is not None
+    c.request("GET", "/api/health")
+    r = c.getresponse()
+    r.read()
+    assert r.status == 200
+    c.close()
