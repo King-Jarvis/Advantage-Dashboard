@@ -72,3 +72,31 @@ export function moneyEl(cents, extra = "") {
     .filter(Boolean).join(" ");
   return el("span", { class: cls, text: money(cents) });
 }
+
+/* Parse what someone types into an amount field.
+ *
+ * Lenient about presentation -- currency symbols, thousands separators, a
+ * bare "420" -- and strict about the result: integer cents or null. Never a
+ * float, because a fraction of a cent entering here is a fraction of a cent
+ * in the ledger.
+ */
+export function parseMoney(text) {
+  if (text === null || text === undefined) return null;
+  const s = String(text).trim().replace(/[^\d.,\-]/g, "");
+  if (!s || s === "-" || s === "." || s === ",") return null;
+  let normalised = s;
+  if (s.includes(",") && s.includes(".")) {
+    normalised = s.lastIndexOf(".") > s.lastIndexOf(",")
+      ? s.replace(/,/g, "")
+      : s.replace(/\./g, "").replace(",", ".");
+  } else if (s.includes(",")) {
+    const tail = s.slice(s.lastIndexOf(",") + 1);
+    normalised = (tail.length === 1 || tail.length === 2)
+      ? s.replace(",", ".")
+      : s.replace(/,/g, "");
+  }
+  const n = Number(normalised);
+  if (!Number.isFinite(n)) return null;
+  // Round through a string to avoid 1.115 * 100 landing on 111.49999999.
+  return Math.round(Number((n * 100).toFixed(4)));
+}

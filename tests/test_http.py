@@ -329,3 +329,145 @@ def test_a_404_does_not_poison_the_connection(live):
     r.read()
     assert r.status == 200
     c.close()
+
+
+# ── budget editing ────────────────────────────────────────────────────────
+def _seed_budget(port, cookie, csrf):
+    """An account, a group and a category, via the API where possible."""
+    from dashboard import ledger, storage
+    conn = storage.connect()
+    acct = ledger.create_account(conn, "Checking")
+    grp = ledger.create_category_group(conn, "Everyday")
+    cat = ledger.create_category(conn, grp, "Groceries")
+    inc = ledger.create_category_group(conn, "Income", is_income=True)
+    sal = ledger.create_category(conn, inc, "Salary", is_income=True)
+    ledger.add_transaction(conn, acct, "2026-08-01", 1000_00, "Pay", sal)
+    other = ledger.create_category(conn, grp, "Fuel")
+    conn.close()
+    return {"acct": acct, "cat": cat, "other": other}
+
+
+def test_setting_a_budget_updates_to_be_budgeted(live):
+    cookie, csrf = login(live)
+    ids = _seed_budget(live, cookie, csrf)
+    status, _, body = call(
+        live, "PATCH", f"/api/edit/budget/2026-08/{ids['cat']}",
+        {"budgeted_cents": 400_00},
+        headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+    assert status == 200
+    assert body["budgeted_cents"] == 400_00
+    assert body["to_be_budgeted_cents"] == 600_00
+
+
+def test_a_budget_must_be_integer_cents(live):
+    cookie, csrf = login(live)
+    ids = _seed_budget(live, cookie, csrf)
+    for bad in (400.5, "400", None):
+        status, _, _ = call(
+            live, "PATCH", f"/api/edit/budget/2026-08/{ids['cat']}",
+            {"budgeted_cents": bad},
+            headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+        assert status == 400, bad
+
+
+def test_budget_edits_need_csrf(live):
+    cookie, _ = login(live)
+    ids = _seed_budget(live, cookie, None)
+    status, _, _ = call(
+        live, "PATCH", f"/api/edit/budget/2026-08/{ids['cat']}",
+        {"budgeted_cents": 100}, headers={"Cookie": cookie})
+    assert status == 403
+
+
+def test_a_malformed_month_or_category_is_a_404_not_a_crash(live):
+    cookie, csrf = login(live)
+    for path in ("/api/edit/budget/2026-8/abc", "/api/edit/budget/xxxx-xx/" + "a" * 32):
+        status, _, _ = call(live, "PATCH", path, {"budgeted_cents": 1},
+                            headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+        assert status in (400, 404), path
+
+
+def test_moving_money_preserves_the_months_total(live):
+    cookie, csrf = login(live)
+    ids = _seed_budget(live, cookie, csrf)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    call(live, "PATCH", f"/api/edit/budget/2026-08/{ids['cat']}",
+         {"budgeted_cents": 300_00}, headers=h)
+    call(live, "PATCH", f"/api/edit/budget/2026-08/{ids['other']}",
+         {"budgeted_cents": 100_00}, headers=h)
+    _, _, before = call(live, "GET", "/api/view/budget?month=2026-08",
+                        headers={"Cookie": cookie})
+
+    status, _, body = call(
+        live, "POST", "/api/edit/budget/2026-08/move",
+        {"from_category": ids["cat"], "to_category": ids["other"],
+         "cents": 50_00}, headers=h)
+    assert status == 200
+    assert body["from"]["budgeted_cents"] == 250_00
+    assert body["to"]["budgeted_cents"] == 150_00
+    # Moving between envelopes must not change how much is unassigned.
+    assert body["to_be_budgeted_cents"] == before["to_be_budgeted_cents"]
+
+
+def test_moving_rejects_nonsense(live):
+    cookie, csrf = login(live)
+    ids = _seed_budget(live, cookie, csrf)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    for payload in (
+        {"from_category": ids["cat"], "to_category": ids["other"], "cents": 0},
+        {"from_category": ids["cat"], "to_category": ids["other"], "cents": -5},
+        {"from_category": ids["cat"], "to_category": ids["cat"], "cents": 100},
+        {"from_category": "nope", "to_category": ids["other"], "cents": 100},
+        {"cents": 100},
+    ):
+        status, _, _ = call(live, "POST", "/api/edit/budget/2026-08/move",
+                            payload, headers=h)
+        assert status == 400, payload
+
+
+# ── suggestions and history ───────────────────────────────────────────────
+def test_suggestions_are_served(live):
+    cookie, csrf = login(live)
+    _seed_budget(live, cookie, csrf)
+    status, _, body = call(live, "GET", "/api/view/suggestions?month=2026-08",
+                           headers={"Cookie": cookie})
+    assert status == 200
+    assert "totals" in body and isinstance(body["suggestions"], list)
+
+
+def test_history_requires_a_real_category_id(live):
+    cookie, _ = login(live)
+    for bad in ("", "abc", "z" * 32):
+        status, _, _ = call(
+            live, "GET", f"/api/view/history?month=2026-08&category={bad}",
+            headers={"Cookie": cookie})
+        assert status == 400, bad
+
+
+def test_history_window_is_clamped(live):
+    cookie, csrf = login(live)
+    ids = _seed_budget(live, cookie, csrf)
+    _, _, body = call(
+        live, "GET",
+        f"/api/view/history?month=2026-08&category={ids['cat']}&months=9999",
+        headers={"Cookie": cookie})
+    # An unbounded window would let a request walk the whole table.
+    assert len(body["months"]) <= 36
+
+
+def test_coverage_is_served(live):
+    cookie, _ = login(live)
+    status, _, body = call(live, "GET", "/api/view/coverage",
+                           headers={"Cookie": cookie})
+    assert status == 200
+    assert "covered" in body and "gaps" in body
+
+
+def test_budget_endpoints_are_closed_to_anonymous_callers(live):
+    for method, path, payload in (
+        ("GET", "/api/view/suggestions?month=2026-08", None),
+        ("GET", "/api/view/coverage", None),
+        ("POST", "/api/edit/budget/2026-08/move", {}),
+    ):
+        status, _, _ = call(live, method, path, payload)
+        assert status == 401, path

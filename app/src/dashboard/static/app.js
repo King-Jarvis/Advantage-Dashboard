@@ -5,8 +5,9 @@
  * before the heading is read.
  */
 import { ApiError, get, setCsrf } from "./api.js";
-import { el, money, moneyEl, mount } from "./dom.js";
+import { el, mount } from "./dom.js";
 import { loginView } from "./login.js";
+import { budgetView } from "./budget-view.js";
 
 const root = document.getElementById("root");
 
@@ -64,55 +65,6 @@ function placeholder(kind, title, line) {
         text: "Connect a Google account to populate this." })));
 }
 
-async function budgetView() {
-  let data;
-  try {
-    data = await get(`/api/view/budget?month=${encodeURIComponent(state.month)}`);
-  } catch (err) {
-    if (err instanceof ApiError && err.status === 401) { state.user = null; render(); return null; }
-    throw err;
-  }
-
-  const tbb = data.to_be_budgeted_cents;
-  const tone = tbb === 0 ? "ok" : tbb > 0 ? "warn" : "danger";
-  const says = tbb === 0 ? "Every pound has a job"
-    : tbb > 0 ? "Waiting to be assigned" : "Assigned more than you have";
-
-  const header = node("budget", `To be budgeted · ${data.month}`,
-    el("div", { class: "row" },
-      moneyEl(tbb, "hero"),
-      el("span", { class: `pill ${tone}`, text: says })));
-
-  const rows = data.categories.map((c) => {
-    // A category is only "overspent" when its balance is negative -- not
-    // when it has spent something, which is what it is for.
-    const over = c.balance_cents < 0;
-    return el("div", { class: "item" },
-      el("span", { class: `status-dot ${over ? "danger" : "ok"}` }),
-      el("div", { class: "grow" },
-        el("div", { text: c.name }),
-        el("div", { class: "hint", text: c.group })),
-      el("span", { class: "money muted", text: money(c.budgeted_cents) }),
-      el("span", { class: "money muted", text: money(c.activity_cents) }),
-      moneyEl(c.balance_cents));
-  });
-
-  const list = data.categories.length
-    ? el("div", { class: "list" }, ...rows)
-    : el("div", { class: "empty" },
-        el("div", { class: "big", text: "No categories yet" }),
-        el("div", { class: "hint", text: "Add categories to start budgeting." }));
-
-  const table = el("section", { class: "node", dataset: { kind: "budget" } },
-    el("header", { class: "node-head" },
-      el("span", { class: "node-title", text: "Categories" }),
-      el("div", { class: "spacer" }),
-      el("span", { class: "label", text: "budgeted · activity · balance" })),
-    el("div", { class: "node-body flush" }, list));
-
-  return el("div", { class: "col" }, header, table);
-}
-
 /* ── render ─────────────────────────────────────────────────────────────── */
 async function render() {
   if (!state.user) {
@@ -129,8 +81,17 @@ async function render() {
   mount(root, topbar(), body);
 
   if (state.view === "budget") {
-    const v = await budgetView();
-    if (v) mount(body, v);
+    try {
+      await budgetView(body, state.month, (m) => { state.month = m; render(); });
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        state.user = null;
+        render();
+        return;
+      }
+      mount(body, el("div", { class: "empty" },
+        el("div", { class: "big", text: "Could not load the budget" })));
+    }
   } else if (state.view === "agenda") {
     mount(body, placeholder("agenda", "Agenda", "Nothing scheduled"));
   } else {

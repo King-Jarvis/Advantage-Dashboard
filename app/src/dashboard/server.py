@@ -16,7 +16,7 @@ import urllib.parse
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import auth, auth_google, security, storage
+from . import auth, auth_google, security, statements, stats, storage
 
 PACKAGE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(PACKAGE, "static")
@@ -42,6 +42,13 @@ ROUTES = [
     ("g_cb",     {"GET"},         re.compile(r"^/api/auth/google/callback$"), "none"),
     ("accounts", {"GET", "POST"}, re.compile(r"^/api/accounts$"),          "session"),
     ("budget",   {"GET"},         re.compile(r"^/api/view/budget$"),       "session"),
+    ("suggest",  {"GET"},         re.compile(r"^/api/view/suggestions$"),  "session"),
+    ("history",  {"GET"},         re.compile(r"^/api/view/history$"),      "session"),
+    ("coverage", {"GET"},         re.compile(r"^/api/view/coverage$"),     "session"),
+    ("setbudget", {"PATCH"},
+     re.compile(r"^/api/edit/budget/(\d{4}-\d{2})/([0-9a-f]{32})$"), "session"),
+    ("movemoney", {"POST"},
+     re.compile(r"^/api/edit/budget/(\d{4}-\d{2})/move$"), "session"),
 ]
 
 
@@ -332,11 +339,15 @@ class Handler(BaseHTTPRequestHandler):
                                     on_budget=bool(data.get("on_budget", True)))
         self.json_out({"id": aid}, 201)
 
-    def api_budget(self, conn, session):
-        from . import ledger
+    def _month(self):
         month = (self.query().get("month") or [""])[0]
         if not re.fullmatch(r"\d{4}-\d{2}", month):
             raise ValueError("month must be YYYY-MM")
+        return month
+
+    def api_budget(self, conn, session):
+        from . import ledger
+        month = self._month()
         cats = conn.execute(
             "SELECT c.id, c.name, g.name gname FROM categories c"
             " JOIN category_groups g ON g.id = c.group_id"
@@ -351,6 +362,91 @@ class Handler(BaseHTTPRequestHandler):
                 "activity_cents": ledger.category_activity(conn, c["id"], month),
                 "balance_cents": ledger.category_balance(conn, c["id"], month),
             } for c in cats]})
+
+    def api_suggest(self, conn, session):
+        """What the history says each category costs.
+
+        Deliberately a separate call from the budget view: it is slower, and
+        the budget must render immediately whether or not suggestions are
+        available.
+        """
+        month = self._month()
+        rows = stats.analyse_all(conn, end_month=month)
+        self.json_out({
+            "month": month,
+            "totals": stats.totals(conn, end_month=month),
+            "suggestions": [{
+                "category_id": r["category_id"], "name": r["name"],
+                "group": r["group"], "kind": r["kind"],
+                "confidence": r["confidence"],
+                "sample_months": r["sample_months"],
+                "suggested_cents": r["suggested_cents"],
+                "low_cents": r["low_cents"], "high_cents": r["high_cents"],
+                "trend_pct": r["trend_pct"], "basis": r["basis"],
+                "occurrences": r.get("occurrences", 0),
+            } for r in rows]})
+
+    def api_history(self, conn, session):
+        """Monthly spend for one category, for the chart."""
+        from . import ledger
+        cat = (self.query().get("category") or [""])[0]
+        if not re.fullmatch(r"[0-9a-f]{32}", cat):
+            raise ValueError("category must be an id")
+        try:
+            window = int((self.query().get("months") or ["12"])[0])
+        except ValueError:
+            raise ValueError("months must be a number") from None
+        window = max(1, min(36, window))
+        month = self._month()
+        a = stats.analyse(conn, cat, end_month=month, window=window)
+        self.json_out({
+            "category_id": cat, "months": a["months"],
+            "spend": [a["spend_by_month"][m] for m in a["months"]],
+            "budgeted": [ledger.get_budget(conn, m, cat) for m in a["months"]],
+            "suggested_cents": a["suggested_cents"],
+            "low_cents": a["low_cents"], "high_cents": a["high_cents"],
+            "kind": a["kind"], "confidence": a["confidence"],
+            "sample_months": a["sample_months"], "basis": a["basis"],
+        })
+
+    def api_coverage(self, conn, session):
+        """Which months have statements behind them, and which do not."""
+        self.json_out({"covered": statements.coverage(conn),
+                       "gaps": statements.gaps(conn)})
+
+    def api_setbudget(self, conn, session, month, category_id):
+        from . import ledger
+        data = self.body_json()
+        cents = data.get("budgeted_cents")
+        if not isinstance(cents, int):
+            raise ValueError("budgeted_cents must be an integer number of cents")
+        ledger.set_budget(conn, month, category_id, cents)
+        self.json_out({
+            "month": month, "category_id": category_id,
+            "budgeted_cents": cents,
+            "balance_cents": ledger.category_balance(conn, category_id, month),
+            "to_be_budgeted_cents": ledger.to_be_budgeted(conn, month)})
+
+    def api_movemoney(self, conn, session, month):
+        from . import ledger
+        data = self.body_json()
+        src, dst = data.get("from_category"), data.get("to_category")
+        cents = data.get("cents")
+        if not isinstance(cents, int) or cents <= 0:
+            raise ValueError("cents must be a positive integer")
+        for cid in (src, dst):
+            if not isinstance(cid, str) or not re.fullmatch(r"[0-9a-f]{32}", cid):
+                raise ValueError("category ids are required")
+        ledger.move_money(conn, month, src, dst, cents)
+        self.json_out({
+            "month": month,
+            "from": {"id": src,
+                     "budgeted_cents": ledger.get_budget(conn, month, src),
+                     "balance_cents": ledger.category_balance(conn, src, month)},
+            "to": {"id": dst,
+                   "budgeted_cents": ledger.get_budget(conn, month, dst),
+                   "balance_cents": ledger.category_balance(conn, dst, month)},
+            "to_be_budgeted_cents": ledger.to_be_budgeted(conn, month)})
 
     # ── static ────────────────────────────────────────────────────────────
     def serve_static(self):

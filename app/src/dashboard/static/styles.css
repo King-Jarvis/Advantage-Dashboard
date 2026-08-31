@@ -278,3 +278,88 @@ a:hover { text-decoration: underline; }
   .tabs { margin-left: 0; width: 100%; overflow-x: auto; }
   .grid { grid-template-columns: 1fr; }
 }
+
+/* ── Chart ──────────────────────────────────────────────────────────────── */
+.chart { width: 100%; height: auto; display: block; }
+.chart-grid { stroke: var(--line); stroke-width: 1; }
+.chart-tick { fill: var(--text-4); font-size: 10px; font-family: var(--mono); }
+.chart-empty { fill: var(--text-4); font-size: 13px; }
+
+/* Actual spend: the ground truth, so it is the solid thing on the page. */
+.chart-actual { fill: var(--info-tint); stroke: var(--info); stroke-width: 1.5; }
+.chart-dot { fill: var(--info); cursor: pointer; }
+.chart-dot:hover { r: 5; }
+
+/* The suggestion. Dashed because it is advice, not a record. */
+.chart-suggested {
+  stroke: var(--brand); stroke-width: 1.5; stroke-dasharray: 5 4;
+}
+/* The band's opacity carries the confidence too, so a low-confidence
+ * suggestion is faint as well as wide. */
+.chart-band { fill: var(--brand); }
+.chart-band.conf-high { opacity: 0.16; }
+.chart-band.conf-medium { opacity: 0.11; }
+.chart-band.conf-low { opacity: 0.07; }
+.chart-band.conf-none { opacity: 0; }
+
+/* Your own budget line: solid, in the working accent, because it is the one
+ * you can change. */
+.chart-budget {
+  fill: none; stroke: var(--ok); stroke-width: 2; stroke-linejoin: round;
+}
+
+.chart-legend {
+  display: flex; gap: var(--s4); flex-wrap: wrap;
+  font-size: var(--t-micro); color: var(--text-3);
+  padding: var(--s2) 0 0 var(--s5);
+}
+.chart-legend .key { display: inline-flex; align-items: center; gap: var(--s1); }
+.chart-legend .swatch { width: 14px; height: 3px; border-radius: 2px; }
+.swatch.actual { background: var(--info); }
+.swatch.suggested { background: var(--brand); }
+.swatch.budget { background: var(--ok); }
+
+/* ── Budget rows ────────────────────────────────────────────────────────── */
+.item.head { background: var(--surface-2); border-bottom: 1px solid var(--line); }
+.item.head:hover { background: var(--surface-2); }
+
+.item.cat { gap: var(--s2); }
+.item.cat .name {
+  flex: none; width: 150px; justify-content: flex-start;
+  padding-left: 0; text-align: left; min-height: 28px;
+}
+.item .amount { width: 108px; flex: none; text-align: right;
+                font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.item .activity, .item .balance {
+  width: 96px; flex: none; text-align: right;
+}
+.item.head .amount, .item.head .activity, .item.head .balance {
+  display: inline-block;
+}
+
+/* Overspend is the one thing on this screen that should catch the eye. */
+.item.cat.over { background: var(--danger-tint); }
+.item.cat.over:hover { background: color-mix(in srgb, var(--danger-tint), #000 8%); }
+
+.item.cat.dragging { opacity: 0.4; }
+.item.cat.drop-target {
+  outline: 2px dashed var(--brand); outline-offset: -2px;
+  background: var(--brand-tint);
+}
+
+.detail {
+  padding: var(--s4) var(--s4) var(--s4) calc(var(--s5) + var(--bar));
+  background: var(--canvas); border-bottom: 1px solid var(--line);
+}
+.detail-actions { margin-top: var(--s3); gap: var(--s3); }
+.basis { color: var(--text-3); }
+
+@media (max-width: 720px) {
+  /* Stack rather than scroll sideways: a horizontally scrolling table of
+   * money is unreadable on a phone. */
+  .item.cat { flex-wrap: wrap; }
+  .item.cat .name { width: auto; flex: 1 1 100%; }
+  .item .amount { width: 92px; }
+  .item .activity { display: none; }
+  .item.head { display: none; }
+}
