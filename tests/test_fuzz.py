@@ -48,7 +48,7 @@ def test_random_operations_never_break_the_invariants(rawconn, seed):
                     c, rng.choice(accounts), a_date(),
                     rng.randint(-50_000, 50_000),
                     payee="P%d" % rng.randint(0, 20),
-                    category_id=rng.choice(cats + [income, None])))
+                    category_id=rng.choice([*cats, income, None])))
             elif op == "transfer":
                 a, b = rng.sample(accounts, 2)
                 out, _ = ledger.add_transfer(c, a, b, a_date(),
@@ -84,7 +84,8 @@ def test_random_operations_never_break_the_invariants(rawconn, seed):
             pass
 
         problems = ledger.check_invariants(c)
-        assert problems == [], "seed %d step %d (%s) broke: %s" % (seed, step, op, problems)
+        assert problems == [], ("seed %d step %d (%s) broke: %s"
+                                % (seed, step, op, problems))
 
 
 def test_transfers_never_change_total_net_worth(rawconn):
@@ -105,7 +106,8 @@ def test_transfers_never_change_total_net_worth(rawconn):
         ledger.add_transfer(c, a, b, "2026-02-01", rng.randint(1, 10_000))
 
     after = sum(ledger.account_balance(c, a) for a in accounts)
-    assert after == before, "moving money between your own accounts created or destroyed some"
+    assert after == before, \
+        "moving money between your own accounts created or destroyed some"
     assert ledger.check_invariants(c) == []
 
 

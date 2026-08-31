@@ -95,7 +95,8 @@ def test_get_conn_is_one_connection_per_thread(tmp_path):
     def worker():
         seen.append(storage.get_conn())
     t = threading.Thread(target=worker)
-    t.start(); t.join()
+    t.start()
+    t.join()
     # sqlite3 connections are not thread-safe; sharing one across threads is
     # how "recursive use of cursors" and silent corruption arrive.
     assert seen[0] is not a
