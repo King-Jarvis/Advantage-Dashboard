@@ -1,0 +1,35 @@
+[project]
+name = "personal-dashboard"
+version = "0.1.0"
+description = "Calendar, mail and budget in one place"
+requires-python = ">=3.11"
+# The runtime is the standard library plus one pinned dependency for
+# encrypting OAuth tokens at rest. See requirements.txt.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
+[tool.ruff]
+line-length = 88
+src = ["app/src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "RUF", "UP"]
+ignore = [
+    # Percent formatting is used deliberately and consistently in this
+    # codebase. It is not a defect, and rewriting 20 call sites to satisfy a
+    # style preference would be churn in code that handles money.
+    "UP031",
+    # Long lines are already caught by E501 at the configured width.
+    "E203",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests name unpacked values for readability even when only one is asserted
+# on; `out, inn = add_transfer(...)` documents what the call returns.
+"tests/*" = ["RUF059"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["app/src"]

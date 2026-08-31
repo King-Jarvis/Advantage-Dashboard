@@ -8,7 +8,6 @@ Deletion is soft. A ledger that forgets is not auditable, and undo on a money
 operation is not optional.
 """
 
-import sqlite3
 
 SCHEMA_VERSION = 1
 
