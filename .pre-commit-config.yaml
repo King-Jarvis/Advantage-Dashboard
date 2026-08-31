@@ -1,0 +1,33 @@
+# Local guards run before a commit exists, which is the only moment that
+# matters: once a secret is pushed to a public repo, removing it does not
+# unpublish it. CI runs the same checks as a backstop.
+repos:
+  - repo: local
+    hooks:
+      - id: no-infra-strings
+        name: no host-specific strings
+        entry: scripts/check-no-infra-strings.sh
+        language: system
+        pass_filenames: false
+
+      - id: no-innerhtml
+        name: no markup sinks in front-end
+        entry: scripts/check-no-innerhtml.sh
+        language: system
+        pass_filenames: false
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-yaml
+      - id: check-merge-conflict
+      - id: detect-private-key

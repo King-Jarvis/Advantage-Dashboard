@@ -1,0 +1,15 @@
+version: 2
+updates:
+  # The runtime has a single pinned dependency and the rest is stdlib, so the
+  # meaningful supply-chain surface is CI actions and base images.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule: { interval: weekly }
+
+  - package-ecosystem: pip
+    directory: "/app"
+    schedule: { interval: weekly }
+
+  - package-ecosystem: docker
+    directory: "/app"
+    schedule: { interval: weekly }
