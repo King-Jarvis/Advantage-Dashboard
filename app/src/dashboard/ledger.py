@@ -26,6 +26,7 @@ import time
 import uuid
 
 from .money import to_cents
+from .text import norm_payee as _norm_payee
 
 __all__ = ["to_cents"]  # re-exported: callers parse money via the ledger
 
@@ -36,10 +37,6 @@ def new_id():
 
 def _now():
     return time.strftime("%Y-%m-%dT%H:%M:%S")
-
-
-def _norm_payee(payee):
-    return " ".join((payee or "").lower().split())
 
 
 def _audit(conn, action, entity_type, entity_id, detail="", actor="system"):

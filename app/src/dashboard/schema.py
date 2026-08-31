@@ -130,6 +130,71 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 CREATE INDEX IF NOT EXISTS ix_sessions_user ON sessions(user_id);
 
+-- ── Statement import ─────────────────────────────────────────────────────
+-- Nothing reaches the ledger until a batch is committed. Rows are parsed,
+-- shown for review, and only then written -- so a misread column or a wrong
+-- date format is caught by a person rather than discovered months later in a
+-- budget that quietly does not add up.
+CREATE TABLE IF NOT EXISTS import_batches (
+    id            TEXT PRIMARY KEY,
+    account_id    TEXT NOT NULL REFERENCES accounts(id),
+    filename      TEXT NOT NULL,
+    fingerprint   TEXT NOT NULL DEFAULT '',   -- identifies the bank's format
+    kind          TEXT NOT NULL DEFAULT 'csv',
+    uploaded_at   TEXT NOT NULL,
+    period_start  TEXT, period_end TEXT,
+    rows_total    INTEGER NOT NULL DEFAULT 0,
+    rows_duplicate INTEGER NOT NULL DEFAULT 0,
+    rows_imported INTEGER NOT NULL DEFAULT 0,
+    state         TEXT NOT NULL DEFAULT 'review'  -- review | committed | discarded
+);
+
+CREATE TABLE IF NOT EXISTS import_rows (
+    id            TEXT PRIMARY KEY,
+    batch_id      TEXT NOT NULL REFERENCES import_batches(id),
+    line_no       INTEGER NOT NULL,
+    raw           TEXT NOT NULL DEFAULT '',
+    date          TEXT,
+    amount_cents  INTEGER,
+    payee         TEXT NOT NULL DEFAULT '',
+    payee_norm    TEXT NOT NULL DEFAULT '',
+    notes         TEXT NOT NULL DEFAULT '',
+    dedup_key     TEXT NOT NULL DEFAULT '',
+    category_id   TEXT REFERENCES categories(id),
+    is_duplicate  INTEGER NOT NULL DEFAULT 0,
+    -- 'exact' when the bank's own id or our dedup key already exists, 'near'
+    -- when it merely looks like one. The distinction matters to whoever is
+    -- reviewing: exact is a fact, near is a judgement they should make.
+    dup_kind      TEXT NOT NULL DEFAULT '',
+    excluded      INTEGER NOT NULL DEFAULT 0,
+    error         TEXT NOT NULL DEFAULT '',
+    txn_id        TEXT REFERENCES transactions(id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_import_rows_batch ON import_rows(batch_id);
+
+-- One mapping per bank format, so each bank is a one-time cost rather than a
+-- code change. Keyed on a hash of the header row.
+CREATE TABLE IF NOT EXISTS bank_mappings (
+    fingerprint TEXT PRIMARY KEY,
+    label       TEXT NOT NULL DEFAULT '',
+    column_map  TEXT NOT NULL,               -- JSON
+    date_format TEXT NOT NULL DEFAULT '',
+    amount_sign INTEGER NOT NULL DEFAULT 1,  -- -1 when outflows are positive
+    created_at  TEXT NOT NULL
+);
+
+-- Which months actually have statement data. The budget engine must never
+-- average over a month it does not have: a gap silently drags a mean toward
+-- zero, and the fix is to make gaps visible rather than to be clever.
+CREATE TABLE IF NOT EXISTS month_coverage (
+    account_id TEXT NOT NULL REFERENCES accounts(id),
+    month      TEXT NOT NULL,
+    txn_count  INTEGER NOT NULL DEFAULT 0,
+    first_day  TEXT, last_day TEXT,
+    PRIMARY KEY (account_id, month)
+);
+
 -- ── OAuth in flight ──────────────────────────────────────────────────────
 -- One row per authorisation attempt, deleted the moment it is used. Kept in
 -- the database rather than in memory so a restart mid-flow fails closed
