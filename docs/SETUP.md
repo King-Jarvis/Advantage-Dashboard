@@ -73,3 +73,52 @@ three is the floor below which the engine declines to suggest anything.
 The coverage map shows which months you have. Gaps matter — the engine will not average
 over a month it does not have, so filling gaps improves suggestions more than adding
 further back history does.
+
+## HTTPS is required, not optional
+
+Both Actual and this dashboard use Web Crypto (`crypto.subtle`), which browsers
+expose **only in a secure context** — HTTPS, or `localhost`/`127.0.0.1`.
+
+Reached over plain HTTP at any other address, Actual loads its JavaScript and
+then dies with:
+
+```
+Error: [object Object]
+    at FatalError (…/static/js/index.*.js)
+```
+
+That is `crypto.subtle` being `undefined`, surfacing as an unhelpful React
+error. It is not a misconfiguration of the server, and no amount of server-side
+debugging will explain it — the server is serving correctly and the browser is
+refusing to provide an API.
+
+So: **do not serve either app over plain HTTP at a LAN address.** It appears to
+work, right up until it doesn't.
+
+### Generating certificates
+
+```bash
+./scripts/make-local-cert.sh --dir /srv/dashboard-certs \
+    --host 192.0.2.10 --host myhost.lan --host actual
+```
+
+Point `CERTS_DIR` at that directory. Two details that are easy to get wrong:
+
+- **An IP address must be an `IP:` SAN**, not `DNS:`. Browsers will not match an
+  IP against a DNS entry, and the resulting error looks unrelated to the cause.
+  The script handles this, but if you hand-roll a certificate, watch for it.
+- **Include every name the service is reached by, including internal container
+  hostnames.** When `actual` serves TLS, `actual-api` connects to it as
+  `actual`, and Node rejects the certificate unless that name is present.
+
+### Trusting the CA
+
+The script emits `ca.crt`. Install it once per device and there are no browser
+warnings anywhere. Skip that and every device shows a warning you must click
+through once — the app works either way, because clicking through still yields
+a secure context.
+
+For the container-to-container hop, `NODE_EXTRA_CA_CERTS=/certs/ca.crt` is what
+makes the wrapper trust it. Do **not** reach for
+`NODE_TLS_REJECT_UNAUTHORIZED=0`: it disables verification for every outbound
+connection that process makes, not just the one you were trying to fix.
