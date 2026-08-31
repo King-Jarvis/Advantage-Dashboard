@@ -145,11 +145,17 @@ def test_a_single_charge_saves_rather_than_suggesting_nothing(conn, book):
     assert a["excluded"] == ["2026-05"]
 
 
-def test_a_category_with_no_spending_suggests_nothing(conn, book):
+def test_a_category_with_no_spending_declines_to_recommend(conn, book):
+    """No evidence, no opinion.
+
+    Recommending zero would read as "budget nothing here", which is wrong for
+    a savings goal that has simply not been drawn on yet -- and nothing in
+    the data distinguishes a goal from a dead category.
+    """
     cover(conn, book, months())
     a = stats.analyse(conn, book["unused"], end_month="2026-12")
     assert a["kind"] == "unused"
-    assert a["suggested_cents"] == 0
+    assert a["suggested_cents"] is None
 
 
 def test_too_little_history_declines_to_guess(conn, book):

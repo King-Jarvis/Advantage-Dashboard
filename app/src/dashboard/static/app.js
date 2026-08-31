@@ -8,6 +8,7 @@ import { ApiError, get, setCsrf } from "./api.js";
 import { el, mount } from "./dom.js";
 import { loginView } from "./login.js";
 import { budgetView } from "./budget-view.js";
+import { overviewView } from "./overview-view.js";
 
 const root = document.getElementById("root");
 
@@ -17,7 +18,12 @@ const VIEWS = [
   { id: "budget", label: "Budget", kind: "budget" },
 ];
 
-const state = { user: null, view: "budget", month: thisMonth() };
+const state = {
+  user: null, view: "budget", month: thisMonth(),
+  // The budget tab has two screens: the chart you read, and the list you
+  // edit. Kept apart because reading and editing want different layouts.
+  editing: false, focusCategory: null,
+};
 
 function thisMonth() {
   const d = new Date();
@@ -57,6 +63,15 @@ function topbar() {
 }
 
 /* ── views ──────────────────────────────────────────────────────────────── */
+function backBar() {
+  return el("div", { class: "row backbar" },
+    el("button", {
+      class: "btn ghost", type: "button", text: "‹ Overview",
+      onclick: () => { state.editing = false; state.focusCategory = null; render(); },
+    }),
+    el("span", { class: "label", text: "editing budget" }));
+}
+
 function placeholder(kind, title, line) {
   return node(kind, title,
     el("div", { class: "empty" },
@@ -82,7 +97,21 @@ async function render() {
 
   if (state.view === "budget") {
     try {
-      await budgetView(body, state.month, (m) => { state.month = m; render(); });
+      const onMonth = (m) => { state.month = m; render(); };
+      if (state.editing) {
+        mount(body, backBar(), el("div", { id: "edit-body" }));
+        await budgetView(document.getElementById("edit-body"),
+                         state.month, onMonth);
+      } else {
+        await overviewView(body, state.month, {
+          onMonth,
+          onEdit: (categoryId) => {
+            state.editing = true;
+            state.focusCategory = categoryId;
+            render();
+          },
+        });
+      }
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         state.user = null;

@@ -43,6 +43,7 @@ ROUTES = [
     ("accounts", {"GET", "POST"}, re.compile(r"^/api/accounts$"),          "session"),
     ("budget",   {"GET"},         re.compile(r"^/api/view/budget$"),       "session"),
     ("suggest",  {"GET"},         re.compile(r"^/api/view/suggestions$"),  "session"),
+    ("overview", {"GET"},         re.compile(r"^/api/view/overview$"),     "session"),
     ("history",  {"GET"},         re.compile(r"^/api/view/history$"),      "session"),
     ("coverage", {"GET"},         re.compile(r"^/api/view/coverage$"),     "session"),
     ("setbudget", {"PATCH"},
@@ -362,6 +363,59 @@ class Handler(BaseHTTPRequestHandler):
                 "activity_cents": ledger.category_activity(conn, c["id"], month),
                 "balance_cents": ledger.category_balance(conn, c["id"], month),
             } for c in cats]})
+
+    def api_overview(self, conn, session):
+        """Everything the main screen draws, in one request.
+
+        The overview is the first thing seen after signing in, so it is a
+        single round trip rather than a budget call followed by a slower
+        suggestions call. Categories with nothing budgeted and nothing spent
+        are dropped: an empty envelope is not a shape worth drawing.
+        """
+        from . import ledger
+        month = self._month()
+        analyses = {a["category_id"]: a
+                    for a in stats.analyse_all(conn, end_month=month)}
+        cats = conn.execute(
+            "SELECT c.id, c.name, g.name gname FROM categories c"
+            " JOIN category_groups g ON g.id = c.group_id"
+            " WHERE c.is_income=0 AND c.hidden=0 ORDER BY g.sort, c.sort"
+        ).fetchall()
+
+        items, short = [], 0
+        for c in cats:
+            a = analyses.get(c["id"], {})
+            budgeted = ledger.get_budget(conn, month, c["id"])
+            # What history says this will actually cost, as distinct from
+            # what it recommends you budget -- for a sinking fund those
+            # differ, and the chart should not pretend otherwise.
+            estimate = a.get("trimmed_mean_cents") or 0
+            recommended = a.get("suggested_cents")
+            if not budgeted and not estimate and not recommended:
+                continue
+            if budgeted < estimate:
+                short += 1
+            items.append({
+                "id": c["id"], "name": c["name"], "group": c["gname"],
+                "budgeted": budgeted,
+                "recommended": recommended,
+                "estimate": estimate,
+                "activity": ledger.category_activity(conn, c["id"], month),
+                "balance": ledger.category_balance(conn, c["id"], month),
+                "kind": a.get("kind", ""),
+                "confidence": a.get("confidence", "none"),
+                "sample_months": a.get("sample_months", 0),
+            })
+
+        self.json_out({
+            "month": month,
+            "to_be_budgeted_cents": ledger.to_be_budgeted(conn, month),
+            "budgeted_total_cents": sum(i["budgeted"] for i in items),
+            "estimate_total_cents": sum(i["estimate"] for i in items),
+            "recommended_total_cents": sum(i["recommended"] or 0 for i in items),
+            "short_categories": short,
+            "items": items,
+        })
 
     def api_suggest(self, conn, session):
         """What the history says each category costs.

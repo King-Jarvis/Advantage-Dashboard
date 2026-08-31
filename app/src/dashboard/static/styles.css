@@ -363,3 +363,72 @@ a:hover { text-decoration: underline; }
   .item .activity { display: none; }
   .item.head { display: none; }
 }
+
+/* ── Budget chart ───────────────────────────────────────────────────────── */
+.bchart { width: 100%; height: auto; display: block; }
+.bchart-grid { stroke: var(--line); stroke-width: 1; }
+.bchart-tick { fill: var(--text-4); font-size: 10px; font-family: var(--mono); }
+.bchart-label { fill: var(--text-3); font-size: 11px; }
+
+/* Estimated spending: glassy rather than solid, so the two lines stay
+ * readable across it. A solid bar would swallow them. */
+.bchart-bar { stroke: var(--info); stroke-opacity: 0.45; stroke-width: 1; }
+
+/* What you budgeted: solid, in the accent you control. */
+.bchart-bud {
+  fill: none; stroke: var(--ok); stroke-width: 2.5;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+/* What the engine recommends: dashed, because it is advice. */
+.bchart-rec {
+  fill: none; stroke: var(--brand); stroke-width: 2;
+  stroke-dasharray: 6 5; stroke-linecap: round; stroke-linejoin: round;
+}
+
+.bchart-dot.bud { fill: var(--ok); stroke: var(--canvas); stroke-width: 2; }
+.bchart-dot.rec { fill: var(--brand); }
+.bchart-hit { fill: transparent; cursor: pointer; }
+
+.bchart-point:hover .bchart-dot.bud,
+.bchart-point:focus-visible .bchart-dot.bud { r: 6.5; }
+.bchart-point:focus-visible { outline: none; }
+.bchart-point:focus-visible .bchart-hit {
+  fill: var(--brand-tint); stroke: var(--brand); stroke-dasharray: 3 3;
+}
+/* Budgeted below what history says it will cost: the ones likely to bite. */
+.bchart-point.short .bchart-dot.bud { fill: var(--warn); }
+
+.legend {
+  display: flex; gap: var(--s5); flex-wrap: wrap; align-items: center;
+  padding: var(--s3) var(--s5) 0; font-size: var(--t-label);
+  color: var(--text-3);
+}
+.legend .key { display: inline-flex; align-items: center; gap: var(--s2); }
+.legend .swatch { width: 18px; height: 3px; border-radius: 2px; flex: none; }
+.legend .swatch.est {
+  height: 12px; border-radius: 3px;
+  background: linear-gradient(var(--info), transparent);
+  border: 1px solid var(--info);
+}
+.legend .swatch.bud { background: var(--ok); }
+.legend .swatch.rec {
+  background: repeating-linear-gradient(90deg, var(--brand) 0 6px,
+                                        transparent 6px 11px);
+}
+
+/* ── Overview ───────────────────────────────────────────────────────────── */
+.stat-row { display: flex; gap: var(--s6); flex-wrap: wrap; align-items: baseline; }
+.stat { display: flex; flex-direction: column; gap: 2px; }
+.stat .stat-label {
+  font-size: var(--t-label); letter-spacing: var(--track);
+  text-transform: uppercase; color: var(--text-3);
+}
+
+@media (max-width: 720px) {
+  /* Rotated names still collide at phone width; the edit screen's list is
+   * the readable form there. */
+  .bchart-label { display: none; }
+  .legend { gap: var(--s3); padding-left: var(--s3); }
+}
+
+.backbar { padding: 0 0 var(--s3); gap: var(--s3); }

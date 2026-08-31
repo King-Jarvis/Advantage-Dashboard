@@ -240,8 +240,13 @@ def analyse(conn, category_id, end_month=None, window=WINDOW_MONTHS):
         return out
 
     if kind == "unused":
-        out["suggested_cents"] = 0
-        out["basis"] = "no spending in the window"
+        # No evidence, so no opinion. Asserting zero would read as "budget
+        # nothing here", which is wrong for a savings goal that has simply
+        # not been drawn on yet -- and the engine cannot tell a goal from a
+        # dead category. Declining is the safer of the two errors.
+        out["suggested_cents"] = None
+        out["basis"] = "nothing spent in %d covered months; no recommendation" \
+                       % len(months)
         return out
 
     if kind == "sinking":
