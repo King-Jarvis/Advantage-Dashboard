@@ -17,7 +17,17 @@ import urllib.parse
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import auth, auth_google, crypt, security, settings, statements, stats, storage
+from . import (
+    auth,
+    auth_google,
+    crypt,
+    feeds,
+    security,
+    settings,
+    statements,
+    stats,
+    storage,
+)
 
 PACKAGE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(PACKAGE, "static")
@@ -58,6 +68,14 @@ ROUTES = [
     ("suggest",  {"GET"},         re.compile(r"^/api/view/suggestions$"),  "session"),
     ("overview", {"GET"},         re.compile(r"^/api/view/overview$"),     "session"),
     ("home",     {"GET"},         re.compile(r"^/api/view/home$"),         "session"),
+    ("agenda",   {"GET"},         re.compile(r"^/api/view/agenda$"),       "session"),
+    ("inbox",    {"GET"},         re.compile(r"^/api/view/inbox$"),        "session"),
+    ("syncst",   {"GET"},         re.compile(r"^/api/view/status$"),       "session"),
+    ("editmsg",  {"PATCH"},
+     re.compile(r"^/api/edit/message/([0-9a-f]{32})$"), "session"),
+    ("ing_ev",   {"POST"},        re.compile(r"^/api/ingest/events$"),     "ingest"),
+    ("ing_msg",  {"POST"},        re.compile(r"^/api/ingest/messages$"),   "ingest"),
+    ("ing_sync", {"POST"},        re.compile(r"^/api/ingest/sync$"),       "ingest"),
     ("history",  {"GET"},         re.compile(r"^/api/view/history$"),      "session"),
     ("coverage", {"GET"},         re.compile(r"^/api/view/coverage$"),     "session"),
     ("txns",     {"GET"},         re.compile(r"^/api/view/transactions$"),  "session"),
@@ -409,6 +427,92 @@ class Handler(BaseHTTPRequestHandler):
                 "balance_cents": ledger.category_balance(conn, c["id"], month),
             } for c in cats]})
 
+    def _int_arg(self, name, default, lo, hi):
+        try:
+            v = int((self.query().get(name) or [str(default)])[0])
+        except ValueError:
+            raise ValueError("%s must be a number" % name) from None
+        return max(lo, min(hi, v))
+
+    def api_agenda(self, conn, session):
+        days = self._int_arg("days", 7, 1, 90)
+        self.json_out({"days": days,
+                       "events": feeds.agenda(conn, days=days, limit=200)})
+
+    def api_inbox(self, conn, session):
+        floor = settings.get(conn, "inbox_min_importance")
+        min_imp = self._int_arg("min_importance", floor, 0, 5)
+        include = (self.query().get("archived") or [""])[0] == "1"
+        self.json_out({
+            "min_importance": min_imp,
+            "messages": feeds.inbox(conn, min_importance=min_imp, limit=100,
+                                    include_archived=include)})
+
+    def api_syncst(self, conn, session):
+        """Per-source freshness, so a stale feed is visible rather than quiet."""
+        self.json_out({"sources": feeds.sync_status(conn),
+                       "accounts": settings.list_google_accounts(conn)})
+
+    def api_editmsg(self, conn, session, message_id):
+        data = self.body_json()
+        fields = {k: v for k, v in data.items()
+                  if k in ("archived", "is_unread", "is_starred",
+                           "importance_override")}
+        if not fields:
+            raise ValueError("nothing to change")
+        try:
+            feeds.set_message(conn, message_id, **fields)
+        except KeyError:
+            return self.fail(404, "no such message")
+        self.json_out({"id": message_id, "updated": sorted(fields)})
+
+    # ── ingest: the n8n side ──────────────────────────────────────────────
+    def _ingest_account(self, conn, data):
+        account = str(data.get("account") or "")
+        if not re.fullmatch(r"[0-9a-f]{32}", account):
+            raise ValueError("account is required")
+        if conn.execute("SELECT 1 FROM google_accounts WHERE id=?",
+                        (account,)).fetchone() is None:
+            raise ValueError("no such connected account")
+        return account
+
+    def api_ing_ev(self, conn, session):
+        data = self.body_json()
+        account = self._ingest_account(conn, data)
+        events = data.get("events")
+        if not isinstance(events, list):
+            raise ValueError("events must be a list")
+        written, skipped = feeds.upsert_events(conn, account, events)
+        feeds.note_sync(conn, "calendar:" + account, "ok",
+                        cursor=str(data.get("cursor") or "") or None)
+        self.json_out({"written": written, "skipped_local_edits": skipped})
+
+    def api_ing_msg(self, conn, session):
+        data = self.body_json()
+        account = self._ingest_account(conn, data)
+        messages = data.get("messages")
+        if not isinstance(messages, list):
+            raise ValueError("messages must be a list")
+        written, skipped = feeds.upsert_messages(conn, account, messages)
+        feeds.note_sync(conn, "mail:" + account, "ok",
+                        cursor=str(data.get("cursor") or "") or None)
+        self.json_out({"written": written, "skipped_local_edits": skipped})
+
+    def api_ing_sync(self, conn, session):
+        """Let a workflow report its own failure.
+
+        A feed that stops is invisible otherwise: the screen shows the last
+        data it received and nothing says it is stale.
+        """
+        data = self.body_json()
+        source = str(data.get("source") or "")[:80]
+        if not source:
+            raise ValueError("source is required")
+        feeds.note_sync(conn, source, str(data.get("status", "ok"))[:40],
+                        error=str(data.get("error", "")),
+                        cursor=str(data.get("cursor") or "") or None)
+        self.json_out({"noted": source})
+
     def api_home(self, conn, session):
         """One summary per section, for the front page.
 
@@ -465,12 +569,29 @@ class Handler(BaseHTTPRequestHandler):
         }
 
         # ── calendar and mail ─────────────────────────────────────────────
-        # Both wait on a connected account. Reporting that plainly beats an
-        # empty list, which reads as "nothing today" rather than "not set up".
-        calendar = {"connected": connected, "events": [], "count": 0,
-                    "reason": "" if connected else "no Google account connected"}
-        mail = {"connected": connected, "messages": [], "count": 0,
-                "reason": "" if connected else "no Google account connected"}
+        # An empty list and an unconfigured integration look identical on
+        # screen unless each says which it is.
+        ev = feeds.agenda(conn, days=7, limit=12) if connected else []
+        msgs = feeds.inbox(conn,
+                           min_importance=settings.get(conn,
+                                                       "inbox_min_importance"),
+                           limit=8) if connected else []
+        calendar = {
+            "connected": connected, "count": len(ev),
+            "reason": "" if connected else "no Google account connected",
+            "events": [{"id": e["id"], "title": e["title"],
+                        "starts_at": e["starts_at"], "ends_at": e["ends_at"],
+                        "all_day": bool(e["all_day"]),
+                        "location": e["location"]} for e in ev],
+        }
+        mail = {
+            "connected": connected, "count": len(msgs),
+            "reason": "" if connected else "no Google account connected",
+            "messages": [{"id": m["id"], "subject": m["subject"],
+                          "sender": m["sender"], "score": m["score"],
+                          "reason": m["reason"],
+                          "received_at": m["received_at"]} for m in msgs],
+        }
 
         self.json_out({
             "month": month,

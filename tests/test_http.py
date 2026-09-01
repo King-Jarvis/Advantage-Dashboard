@@ -840,3 +840,116 @@ def test_committing_needs_csrf(live):
     status, _, _ = call(live, "POST", f"/api/import/batch/{body['batch_id']}",
                         {}, headers={"Cookie": cookie})
     assert status == 403
+
+
+# ── calendar and mail feeds ───────────────────────────────────────────────
+def _google_account(tmp_path, monkeypatch):
+    from dashboard import crypt, settings, storage
+    k = tmp_path / "gk"
+    k.write_text("a-long-random-secret-for-this-test-only")
+    monkeypatch.setenv("TOKEN_KEY_PATH", str(k))
+    crypt.reset_for_tests()
+    conn = storage.connect()
+    aid = settings.save_google_account(conn, "sub-1", "a@example.com",
+                                       "FAKE-REFRESH", "FAKE-ACCESS", None, "s")
+    conn.close()
+    return aid
+
+
+def test_ingest_needs_the_ingest_key_not_a_session(live, tmp_path, monkeypatch):
+    acct = _google_account(tmp_path, monkeypatch)
+    cookie, csrf = login(live)
+    # A browser session must never reach an ingest route.
+    status, _, _ = call(live, "POST", "/api/ingest/events",
+                        {"account": acct, "events": []},
+                        headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+    assert status == 401
+    from dashboard import crypt
+    crypt.reset_for_tests()
+
+
+def test_ingested_events_reach_the_agenda(live, tmp_path, monkeypatch):
+    import os
+
+    from dashboard import crypt
+    acct = _google_account(tmp_path, monkeypatch)
+    monkeypatch.setenv("INGEST_KEY", "test-ingest-key")
+    os.environ["INGEST_KEY"] = "test-ingest-key"
+
+    # Within the agenda's horizon: an event far enough ahead is correctly
+    # excluded, which is behaviour rather than a bug to test around.
+    import datetime
+    soon = (datetime.datetime.now() + datetime.timedelta(days=2)).strftime(
+        "%Y-%m-%dT09:00:00")
+    status, _, body = call(live, "POST", "/api/ingest/events", {
+        "account": acct,
+        "events": [{"source_uid": "e1", "title": "Standup", "starts_at": soon}],
+    }, headers={"X-Ingest-Key": "test-ingest-key"})
+    assert status == 200 and body["written"] == 1
+
+    cookie, _ = login(live)
+    _, _, agenda = call(live, "GET", "/api/view/agenda?days=7",
+                        headers={"Cookie": cookie})
+    assert [e["title"] for e in agenda["events"]] == ["Standup"]
+    del os.environ["INGEST_KEY"]
+    crypt.reset_for_tests()
+
+
+def test_correcting_an_importance_survives_the_next_sync(live, tmp_path,
+                                                         monkeypatch):
+    import os
+
+    from dashboard import crypt
+    acct = _google_account(tmp_path, monkeypatch)
+    os.environ["INGEST_KEY"] = "test-ingest-key"
+    h_ing = {"X-Ingest-Key": "test-ingest-key"}
+
+    call(live, "POST", "/api/ingest/messages", {
+        "account": acct,
+        "messages": [{"source_uid": "m1", "subject": "Invoice",
+                      "received_at": "2026-09-01T09:00:00", "importance": 1}],
+    }, headers=h_ing)
+
+    cookie, csrf = login(live)
+    _, _, inbox = call(live, "GET", "/api/view/inbox?min_importance=0",
+                       headers={"Cookie": cookie})
+    mid = inbox["messages"][0]["id"]
+    call(live, "PATCH", f"/api/edit/message/{mid}", {"importance_override": 5},
+         headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+
+    # A later sync re-asserts the classifier's low score; the correction wins.
+    _, _, again = call(live, "POST", "/api/ingest/messages", {
+        "account": acct,
+        "messages": [{"source_uid": "m1", "subject": "Invoice",
+                      "received_at": "2026-09-01T09:00:00", "importance": 1}],
+    }, headers=h_ing)
+    assert again["skipped_local_edits"] == 1
+
+    _, _, after = call(live, "GET", "/api/view/inbox?min_importance=4",
+                       headers={"Cookie": cookie})
+    assert [m["id"] for m in after["messages"]] == [mid]
+    del os.environ["INGEST_KEY"]
+    crypt.reset_for_tests()
+
+
+def test_ingest_refuses_an_unknown_account(live, monkeypatch):
+    import os
+    os.environ["INGEST_KEY"] = "test-ingest-key"
+    status, _, _ = call(live, "POST", "/api/ingest/events",
+                        {"account": "f" * 32, "events": []},
+                        headers={"X-Ingest-Key": "test-ingest-key"})
+    assert status == 400
+    del os.environ["INGEST_KEY"]
+
+
+def test_a_workflow_can_report_its_own_failure(live, monkeypatch):
+    import os
+    os.environ["INGEST_KEY"] = "test-ingest-key"
+    call(live, "POST", "/api/ingest/sync",
+         {"source": "mail:x", "status": "error", "error": "invalid_grant"},
+         headers={"X-Ingest-Key": "test-ingest-key"})
+    cookie, _ = login(live)
+    _, _, st = call(live, "GET", "/api/view/status", headers={"Cookie": cookie})
+    # A feed that stops must be visible, not just quiet.
+    assert st["sources"][0]["last_error"] == "invalid_grant"
+    del os.environ["INGEST_KEY"]

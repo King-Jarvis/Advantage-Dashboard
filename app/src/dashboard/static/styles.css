@@ -681,3 +681,56 @@ a:hover { text-decoration: underline; }
   .improw .catsel { width: 100%; }
   .improw .impamt { margin-left: auto; }
 }
+
+/* ── Agenda ─────────────────────────────────────────────────────────────── */
+.dayblock { border-bottom: 1px solid var(--line); }
+.dayblock:last-child { border-bottom: 0; }
+.dayhead {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: var(--s3) var(--s4) var(--s2) calc(var(--s4) + var(--bar));
+  background: var(--surface-2);
+}
+.eventrow {
+  display: flex; align-items: baseline; gap: var(--s3);
+  padding: var(--s3) var(--s4) var(--s3) calc(var(--s4) + var(--bar));
+  border-top: 1px solid var(--line);
+}
+.eventrow .evtime {
+  font-family: var(--mono); color: var(--text-2); flex: none; width: 68px;
+}
+.eventrow .evtitle { color: var(--text); }
+.eventrow .grow { min-width: 0; }
+.eventrow .grow > * { overflow: hidden; text-overflow: ellipsis;
+                      white-space: nowrap; }
+.acctchip { flex: none; }
+
+/* ── Inbox ──────────────────────────────────────────────────────────────── */
+.msgrow {
+  display: flex; align-items: flex-start; gap: var(--s3);
+  padding: var(--s3) var(--s4) var(--s3) calc(var(--s4) + var(--bar));
+  border-bottom: 1px solid var(--line);
+}
+.msgrow:last-child { border-bottom: 0; }
+.msgrow:hover { background: var(--surface-2); }
+.msgrow .grow { min-width: 0; }
+.msgsubject { color: var(--text-3); }
+/* Unread is the one thing worth weighting here; everything else is ranked
+ * by the score, which is already shown as a number. */
+.msgrow.unread .msgsubject { color: var(--text); font-weight: 600; }
+.msgsubject, .msgmeta { overflow: hidden; text-overflow: ellipsis;
+                        white-space: nowrap; }
+.msgmeta { font-size: var(--t-label); color: var(--text-3); }
+.msgmeta .dot { margin: 0 var(--s1); color: var(--text-4); }
+.msgreason {
+  font-size: var(--t-label); color: var(--text-3);
+  border-left: 2px solid var(--line-lit); padding-left: var(--s2);
+  margin-top: var(--s1);
+}
+.scorepick { width: 132px; flex: none; }
+
+@media (max-width: 900px) {
+  .msgrow { flex-wrap: wrap; }
+  .msgrow .grow { flex: 1 1 100%; }
+  .scorepick { width: 120px; }
+  .eventrow { flex-wrap: wrap; }
+}

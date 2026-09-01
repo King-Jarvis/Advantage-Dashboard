@@ -11,6 +11,29 @@
 import { get } from "./api.js";
 import { el, money, moneyEl, mount, svg } from "./dom.js";
 
+/* Times come off the wire as ISO strings; the widget wants "09:30" and a day
+ * marker when it is not today. Reading e.time -- a field the API does not
+ * send -- left every row blank, which looked like a styling problem and was
+ * not. */
+function whenLabel(e) {
+  if (e.all_day) return "all day";
+  const d = new Date(String(e.starts_at).length <= 10
+    ? `${e.starts_at}T00:00:00` : e.starts_at);
+  if (Number.isNaN(d.getTime())) return "";
+  const hhmm = `${String(d.getHours()).padStart(2, "0")}:`
+             + `${String(d.getMinutes()).padStart(2, "0")}`;
+  const today = new Date();
+  const sameDay = d.getDate() === today.getDate()
+    && d.getMonth() === today.getMonth()
+    && d.getFullYear() === today.getFullYear();
+  if (sameDay) return hhmm;
+  const tom = new Date(Date.now() + 86400000);
+  const isTom = d.getDate() === tom.getDate() && d.getMonth() === tom.getMonth();
+  const day = isTom ? "tom"
+    : ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()];
+  return `${day} ${hhmm}`;
+}
+
 function widget(kind, title, action, ...body) {
   return el("section", { class: "node widget", dataset: { kind } },
     el("header", { class: "node-head" },
@@ -159,9 +182,11 @@ function calendarWidget(c, onGo, onSettings) {
   }
   return widget("agenda", "Agenda", goto("Open", onGo, "agenda"),
     el("div", { class: "wlist" },
-      ...c.events.slice(0, 5).map((e) => el("div", { class: "wrow" },
-        el("span", { class: "wtime", text: e.time || "" }),
-        el("span", { class: "grow", text: e.title || "(untitled)" })))));
+      ...c.events.slice(0, 6).map((e) => el("div", { class: "wrow" },
+        el("span", { class: "wtime", text: whenLabel(e) }),
+        el("span", { class: "grow" },
+          el("div", { text: e.title || "(untitled)" }),
+          e.location ? el("div", { class: "hint", text: e.location }) : null)))));
 }
 
 /* ── mail ───────────────────────────────────────────────────────────────── */
@@ -180,7 +205,9 @@ function mailWidget(m, onGo, onSettings) {
   return widget("inbox", "Inbox", goto("Open", onGo, "inbox"),
     el("div", { class: "wlist" },
       ...m.messages.slice(0, 5).map((x) => el("div", { class: "wrow" },
-        el("span", { class: "status-dot warn" }),
+        el("span", {
+          class: "pill " + (x.score >= 5 ? "danger" : x.score >= 4 ? "warn" : "info"),
+          text: String(x.score) }),
         el("span", { class: "grow" },
           el("div", { class: "wsubject", text: x.subject || "(no subject)" }),
           el("div", { class: "hint", text: x.sender || "" }))))));

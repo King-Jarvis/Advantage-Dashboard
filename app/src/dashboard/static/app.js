@@ -12,6 +12,8 @@ import { overviewView } from "./overview-view.js";
 import { homeView } from "./home-view.js";
 import { settingsView } from "./settings-view.js";
 import { importView } from "./import-view.js";
+import { agendaView } from "./agenda-view.js";
+import { inboxView } from "./inbox-view.js";
 
 const root = document.getElementById("root");
 
@@ -192,9 +194,27 @@ async function render() {
         el("div", { class: "big", text: "Could not load the budget" })));
     }
   } else if (state.view === "agenda") {
-    mount(body, placeholder("agenda", "Agenda", "Nothing scheduled"));
+    try {
+      await agendaView(body, { onSettings: () => go({ view: "settings" }) });
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        state.user = null;
+        await render();
+        return;
+      }
+      mount(body, placeholder("agenda", "Agenda", "Could not load the agenda"));
+    }
   } else {
-    mount(body, placeholder("inbox", "Inbox", "Nothing needs you"));
+    try {
+      await inboxView(body, { onSettings: () => go({ view: "settings" }) });
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        state.user = null;
+        await render();
+        return;
+      }
+      mount(body, placeholder("inbox", "Inbox", "Could not load the inbox"));
+    }
   }
 }
 

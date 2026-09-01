@@ -208,6 +208,75 @@ CREATE TABLE IF NOT EXISTS oauth_pending (
     expires_at    TEXT NOT NULL
 );
 
+-- ── Calendar ─────────────────────────────────────────────────────────────
+-- Mirrors what Google holds. The provider owns this data, so the local copy
+-- is a cache with one exception: a row with `dirty` set carries a local edit
+-- that has not been pushed yet, and a poll must not overwrite it.
+CREATE TABLE IF NOT EXISTS events (
+    id           TEXT PRIMARY KEY,
+    account_id   TEXT NOT NULL REFERENCES google_accounts(id) ON DELETE CASCADE,
+    source_uid   TEXT NOT NULL,             -- the provider's own id
+    calendar_id  TEXT NOT NULL DEFAULT '',
+    title        TEXT NOT NULL DEFAULT '',
+    description  TEXT NOT NULL DEFAULT '',
+    location     TEXT NOT NULL DEFAULT '',
+    starts_at    TEXT NOT NULL,             -- ISO 8601, UTC
+    ends_at      TEXT,
+    all_day      INTEGER NOT NULL DEFAULT 0,
+    status       TEXT NOT NULL DEFAULT 'confirmed',
+    updated_at   TEXT NOT NULL,
+    dirty        INTEGER NOT NULL DEFAULT 0,
+    deleted      INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(account_id, source_uid)
+);
+
+CREATE INDEX IF NOT EXISTS ix_events_when ON events(starts_at);
+
+-- ── Mail ─────────────────────────────────────────────────────────────────
+-- Metadata and a snippet only. Full bodies are not stored: they are not
+-- needed to decide whether something wants you, and holding them would turn
+-- a convenience into a second copy of your mailbox.
+CREATE TABLE IF NOT EXISTS messages (
+    id            TEXT PRIMARY KEY,
+    account_id    TEXT NOT NULL REFERENCES google_accounts(id) ON DELETE CASCADE,
+    source_uid    TEXT NOT NULL,
+    thread_id     TEXT NOT NULL DEFAULT '',
+    sender        TEXT NOT NULL DEFAULT '',
+    sender_email  TEXT NOT NULL DEFAULT '',
+    subject       TEXT NOT NULL DEFAULT '',
+    snippet       TEXT NOT NULL DEFAULT '',
+    received_at   TEXT NOT NULL,
+    is_unread     INTEGER NOT NULL DEFAULT 1,
+    is_starred    INTEGER NOT NULL DEFAULT 0,
+    archived      INTEGER NOT NULL DEFAULT 0,
+    labels        TEXT NOT NULL DEFAULT '',
+    -- What the classifier thought, and what you said when it was wrong.
+    -- Kept apart so a correction survives re-classification.
+    importance    INTEGER,
+    importance_override INTEGER,
+    reason        TEXT NOT NULL DEFAULT '',
+    model         TEXT NOT NULL DEFAULT '',
+    classified_at TEXT,
+    dirty         INTEGER NOT NULL DEFAULT 0,
+    deleted       INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(account_id, source_uid)
+);
+
+CREATE INDEX IF NOT EXISTS ix_messages_when ON messages(received_at);
+CREATE INDEX IF NOT EXISTS ix_messages_rank ON messages(archived, importance);
+
+-- ── Sync bookkeeping ─────────────────────────────────────────────────────
+-- What each source last managed, so a stale or failing feed is visible on
+-- screen rather than looking like a quiet week.
+CREATE TABLE IF NOT EXISTS sync_state (
+    source       TEXT PRIMARY KEY,          -- 'calendar:<account>', 'mail:<account>'
+    cursor       TEXT NOT NULL DEFAULT '',
+    last_run_at  TEXT,
+    last_ok_at   TEXT,
+    last_status  TEXT NOT NULL DEFAULT '',
+    last_error   TEXT NOT NULL DEFAULT ''
+);
+
 -- ── Settings ─────────────────────────────────────────────────────────────
 -- Key/value rather than columns, so adding a setting is not a migration.
 -- `secret` marks a value stored encrypted; those are never returned to the
