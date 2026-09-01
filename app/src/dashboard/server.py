@@ -420,7 +420,7 @@ class Handler(BaseHTTPRequestHandler):
             "SELECT id, name FROM categories WHERE is_income=0 AND hidden=0"
         ).fetchall()
         spent = budgeted = 0
-        over = []
+        over, per_cat = [], []
         for c in cats:
             b = ledger.get_budget(conn, month, c["id"])
             a = max(0, -ledger.category_activity(conn, c["id"], month))
@@ -429,7 +429,13 @@ class Handler(BaseHTTPRequestHandler):
             bal = ledger.category_balance(conn, c["id"], month)
             if bal < 0:
                 over.append({"name": c["name"], "over_cents": -bal})
+            if b or a:
+                per_cat.append({"id": c["id"], "name": c["name"],
+                                "spent_cents": a, "budgeted_cents": b})
         over.sort(key=lambda x: -x["over_cents"])
+        # Ranked by what has actually gone out, falling back to what was set
+        # aside, so a month that has barely started still shows its shape.
+        per_cat.sort(key=lambda x: (-x["spent_cents"], -x["budgeted_cents"]))
 
         # A month nobody has budgeted for yet is a different state from one
         # where nothing has been spent, and the widget must be able to tell
@@ -448,6 +454,7 @@ class Handler(BaseHTTPRequestHandler):
             "overspent_count": len(over),
             "has_data": bool(cats),
             "started": budgeted > 0 or spent > 0,
+            "top": per_cat[:7],
             "last_budgeted_month": last,
         }
 

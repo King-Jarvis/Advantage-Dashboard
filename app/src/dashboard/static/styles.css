@@ -273,7 +273,9 @@ a:hover { text-decoration: underline; }
 
 /* ── Responsive ─────────────────────────────────────────────────────────── */
 @media (max-width: 720px) {
-  .widgets { grid-template-columns: 1fr; grid-auto-rows: auto; }
+  .widgets { grid-template-columns: 1fr; grid-template-rows: none;
+             grid-auto-rows: auto; }
+  .widgets > :nth-child(3) { grid-column: auto; }
   .app > .canvas.home { display: block; }
   .canvas { padding: var(--s3); }
   .topbar { padding: var(--s2) var(--s3); flex-wrap: wrap; }
@@ -539,14 +541,20 @@ a:hover { text-decoration: underline; }
   padding: var(--gutter);
   max-width: none;          /* fill the display, not a reading column */
 }
+/* Inbox and budget above, agenda across the bottom.
+ *
+ * The two on top answer "what wants me" and "where is the money", which are
+ * glances. The agenda answers "what is coming", which is a list -- and a list
+ * read at a glance needs width, not a third of it. */
 .widgets {
   flex: 1;
   display: grid;
-  gap: var(--s4);
-  align-items: stretch;     /* equal height, not ragged */
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  grid-auto-rows: minmax(0, 1fr);
+  gap: var(--gutter);
+  align-items: stretch;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1.1fr);
 }
+.widgets > :nth-child(3) { grid-column: 1 / -1; }
 .widget { display: flex; flex-direction: column; min-height: 0; }
 .widget .node-body {
   display: flex; flex-direction: column; gap: var(--s3);
@@ -568,6 +576,24 @@ a:hover { text-decoration: underline; }
 .wtime { font-family: var(--mono); color: var(--text-3); flex: none; }
 .ok-line { color: var(--text-3); }
 .widget .empty { padding: var(--s5) var(--s2); margin: auto 0; }
+
+/* ── Mini spending chart ────────────────────────────────────────────────── */
+.minibox { display: flex; flex-direction: column; gap: var(--s1); }
+.mini { width: 100%; height: 82px; display: block; }
+/* The budgeted envelope, and the line it ends at. */
+.mini-plan { fill: var(--info); fill-opacity: 0.13; }
+.mini-budget-line {
+  stroke: var(--text-4); stroke-width: 0.5; stroke-dasharray: 1.5 1.5;
+  vector-effect: non-scaling-stroke;
+}
+.mini-spent { fill: var(--info); fill-opacity: 0.85; }
+.mini-spent.over { fill: var(--danger); fill-opacity: 0.9; }
+.minilabels { display: flex; gap: 0; }
+.minilabel {
+  flex: 1; min-width: 0; text-align: center;
+  font-size: var(--t-micro); color: var(--text-4);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 /* Short displays give the widgets less room, so the chrome takes less of it.
  * Keyed on height, not width: a wide-but-short panel has the same problem. */
