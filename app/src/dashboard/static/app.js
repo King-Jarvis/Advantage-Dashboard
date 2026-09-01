@@ -25,6 +25,29 @@ const state = {
   editing: false, focusCategory: null,
 };
 
+/* Routing lives in the URL fragment.
+ *
+ * Not for cleverness: without it the back button leaves the app entirely,
+ * a reload always lands on the overview, and no screen can be linked to.
+ * A fragment keeps all of that working with no server-side routing. */
+function readHash() {
+  const parts = (location.hash || "").replace(/^#\/?/, "").split("/");
+  if (VIEWS.some((v) => v.id === parts[0])) state.view = parts[0];
+  state.editing = parts[0] === "budget" && parts[1] === "edit";
+  if (/^\d{4}-\d{2}$/.test(parts[2] || "")) state.month = parts[2];
+}
+
+function writeHash() {
+  const parts = [state.view];
+  if (state.view === "budget" && state.editing) parts.push("edit", state.month);
+  const next = "#/" + parts.join("/");
+  if (location.hash !== next) {
+    // replaceState, not a new entry: month paging would otherwise fill the
+    // history with steps nobody wants to walk back through.
+    history.replaceState(null, "", next);
+  }
+}
+
 function thisMonth() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -43,7 +66,7 @@ function topbar() {
     ...VIEWS.map((v) => el("button", {
       class: "tab", type: "button",
       "aria-current": state.view === v.id ? "page" : null,
-      onclick: () => { state.view = v.id; render(); },
+      onclick: () => go({ view: v.id, editing: false }),
       text: v.label,
     })));
 
@@ -67,7 +90,7 @@ function backBar() {
   return el("div", { class: "row backbar" },
     el("button", {
       class: "btn ghost", type: "button", text: "‹ Overview",
-      onclick: () => { state.editing = false; state.focusCategory = null; render(); },
+      onclick: () => go({ editing: false, focusCategory: null }),
     }),
     el("span", { class: "label", text: "editing budget" }));
 }
@@ -81,6 +104,12 @@ function placeholder(kind, title, line) {
 }
 
 /* ── render ─────────────────────────────────────────────────────────────── */
+async function go(patchState) {
+  Object.assign(state, patchState);
+  writeHash();
+  await render();
+}
+
 async function render() {
   if (!state.user) {
     let googleEnabled = false;
@@ -97,7 +126,7 @@ async function render() {
 
   if (state.view === "budget") {
     try {
-      const onMonth = (m) => { state.month = m; render(); };
+      const onMonth = (m) => go({ month: m });
       if (state.editing) {
         mount(body, backBar(), el("div", { id: "edit-body" }));
         await budgetView(document.getElementById("edit-body"),
@@ -105,11 +134,7 @@ async function render() {
       } else {
         await overviewView(body, state.month, {
           onMonth,
-          onEdit: (categoryId) => {
-            state.editing = true;
-            state.focusCategory = categoryId;
-            render();
-          },
+          onEdit: (categoryId) => go({ editing: true, focusCategory: categoryId }),
         });
       }
     } catch (err) {
@@ -136,7 +161,15 @@ async function boot() {
   } catch {
     state.user = null;
   }
+  readHash();
+  writeHash();
   render();
 }
+
+// The back button, and pasted links, both arrive as a hash change.
+window.addEventListener("hashchange", () => {
+  readHash();
+  render().catch(() => { /* a failed re-render must not break navigation */ });
+});
 
 boot();

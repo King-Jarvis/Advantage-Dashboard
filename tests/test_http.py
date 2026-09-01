@@ -471,3 +471,100 @@ def test_budget_endpoints_are_closed_to_anonymous_callers(live):
     ):
         status, _, _ = call(live, method, path, payload)
         assert status == 401, path
+
+
+# ── categories ────────────────────────────────────────────────────────────
+def test_creating_a_group_then_a_category(live):
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    status, _, grp = call(live, "POST", "/api/category-groups",
+                          {"name": "Everyday"}, headers=h)
+    assert status == 201
+    status, _, cat = call(live, "POST", "/api/categories",
+                          {"name": "Coffee", "group_id": grp["id"]}, headers=h)
+    assert status == 201 and cat["name"] == "Coffee"
+
+    _, _, listing = call(live, "GET", "/api/categories",
+                         headers={"Cookie": cookie})
+    assert [c["name"] for c in listing["categories"]] == ["Coffee"]
+
+
+def test_a_category_needs_a_name_and_a_real_group(live):
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    _, _, grp = call(live, "POST", "/api/category-groups",
+                     {"name": "G"}, headers=h)
+    for payload in ({"group_id": grp["id"]},
+                    {"name": "  ", "group_id": grp["id"]},
+                    {"name": "X"},
+                    {"name": "X", "group_id": "nope"},
+                    {"name": "X", "group_id": "f" * 32}):
+        status, _, _ = call(live, "POST", "/api/categories", payload, headers=h)
+        assert status == 400, payload
+
+
+def test_duplicate_names_in_one_group_are_refused(live):
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    _, _, grp = call(live, "POST", "/api/category-groups", {"name": "G"}, headers=h)
+    call(live, "POST", "/api/categories",
+         {"name": "Coffee", "group_id": grp["id"]}, headers=h)
+    status, _, _ = call(live, "POST", "/api/categories",
+                        {"name": "Coffee", "group_id": grp["id"]}, headers=h)
+    assert status == 400
+
+
+def test_renaming_and_hiding_a_category(live):
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    _, _, grp = call(live, "POST", "/api/category-groups", {"name": "G"}, headers=h)
+    _, _, cat = call(live, "POST", "/api/categories",
+                     {"name": "Cofee", "group_id": grp["id"]}, headers=h)
+    status, _, _ = call(live, "PATCH", f"/api/categories/{cat['id']}",
+                        {"name": "Coffee"}, headers=h)
+    assert status == 200
+
+    call(live, "PATCH", f"/api/categories/{cat['id']}", {"hidden": True}, headers=h)
+    _, _, visible = call(live, "GET", "/api/categories", headers={"Cookie": cookie})
+    assert visible["categories"] == []
+    _, _, all_cats = call(live, "GET", "/api/categories?hidden=1",
+                          headers={"Cookie": cookie})
+    assert [c["name"] for c in all_cats["categories"]] == ["Coffee"]
+
+
+def test_a_category_with_history_is_hidden_not_deleted(live):
+    """Deleting it would leave past transactions pointing at nothing."""
+    from dashboard import ledger, storage
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    _, _, grp = call(live, "POST", "/api/category-groups", {"name": "G"}, headers=h)
+    _, _, cat = call(live, "POST", "/api/categories",
+                     {"name": "Coffee", "group_id": grp["id"]}, headers=h)
+
+    conn = storage.connect()
+    acct = ledger.create_account(conn, "Chk")
+    ledger.add_transaction(conn, acct, "2026-08-01", -350, "Roasters", cat["id"])
+    conn.close()
+
+    _, _, body = call(live, "DELETE", f"/api/categories/{cat['id']}", headers=h)
+    assert body["outcome"] == "hidden"
+
+
+def test_an_unused_category_is_deleted_outright(live):
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    _, _, grp = call(live, "POST", "/api/category-groups", {"name": "G"}, headers=h)
+    _, _, cat = call(live, "POST", "/api/categories",
+                     {"name": "Scratch", "group_id": grp["id"]}, headers=h)
+    _, _, body = call(live, "DELETE", f"/api/categories/{cat['id']}", headers=h)
+    assert body["outcome"] == "deleted"
+
+
+def test_category_changes_need_csrf(live):
+    cookie, csrf = login(live)
+    _, _, grp = call(live, "POST", "/api/category-groups", {"name": "G"},
+                     headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+    status, _, _ = call(live, "POST", "/api/categories",
+                        {"name": "X", "group_id": grp["id"]},
+                        headers={"Cookie": cookie})
+    assert status == 403

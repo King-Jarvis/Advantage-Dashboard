@@ -36,6 +36,11 @@ jobs:
       - name: no markup sinks in front-end
         run: ./scripts/check-no-innerhtml.sh
 
+      - name: front-end modules parse
+        # No build step means a syntax error is not found until a browser
+        # silently renders nothing, with no trace anywhere the server sees.
+        run: ./scripts/check-js-syntax.sh
+
       - name: nothing sensitive is tracked
         run: |
           # A .gitignore rule only helps if it was already there when the file

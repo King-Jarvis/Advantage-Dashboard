@@ -1,9 +1,18 @@
-/* The budget at a glance: bars for what you will spend, lines for what you
- * planned and what is advised.
+/* The budget at a glance: one column per category, two lines across them.
  *
- *   glassy bars  -- estimated spending, from your own history
+ * Each column is a single width, filled from the bottom:
+ *
+ *   solid        -- what has actually gone out this month
+ *   glass above  -- the rest of what history expects you to spend
  *   solid line   -- what you have budgeted
  *   dashed line  -- what the engine recommends
+ *
+ * One bar, not two of different widths. Nesting a narrow bar inside a wide
+ * one asks the eye to compare two edges that do not share a baseline; a
+ * single column filling up asks it to compare one edge against a line, which
+ * is the same question everyone already answers when reading a fuel gauge.
+ *
+ * Kanso: the simpler drawing carries the same three facts.
  *
  * Ordered largest to smallest, left to right. That ordering makes the chart a
  * ranking, which is the honest reading: the categories that decide whether
@@ -63,7 +72,7 @@ export function budgetChart(items, { onPick, height = H } = {}) {
   const innerH = height - PAD.top - PAD.bottom;
   const top = niceTop(Math.max(
     ...data.map((d) => Math.max(d.estimate || 0, d.budgeted || 0,
-                                d.recommended || 0))));
+                                d.actual || 0, d.recommended || 0))));
   const slot = innerW / data.length;
   const barW = Math.min(MAX_BAR, slot * 0.62);
   const cx = (i) => PAD.left + slot * i + slot / 2;
@@ -73,9 +82,9 @@ export function budgetChart(items, { onPick, height = H } = {}) {
   const defs = svg("defs", {},
     svg("linearGradient", { id: "barFill", x1: "0", y1: "0", x2: "0", y2: "1" },
       svg("stop", { offset: "0%", "stop-color": "var(--info)",
-                    "stop-opacity": "0.42" }),
+                    "stop-opacity": "0.34" }),
       svg("stop", { offset: "100%", "stop-color": "var(--info)",
-                    "stop-opacity": "0.06" })));
+                    "stop-opacity": "0.05" })));
   root.append(defs);
 
   for (let i = 0; i <= 4; i++) {
@@ -87,13 +96,39 @@ export function budgetChart(items, { onPick, height = H } = {}) {
                     "text-anchor": "end", text: money(v) }));
   }
 
-  // 1. Estimated spending, as glassy bars behind everything else.
+  // One column per category, filled from the bottom.
   data.forEach((d, i) => {
-    const h = base - y(d.estimate || 0);
-    root.append(svg("rect", {
-      class: "bchart-bar", x: cx(i) - barW / 2, y: y(d.estimate || 0),
-      width: barW, height: Math.max(0, h), rx: 3, fill: "url(#barFill)",
-    }));
+    const spent = d.actual || 0;
+    const expected = d.estimate || 0;
+    const overBudget = d.budgeted > 0 && spent > d.budgeted;
+    const left = cx(i) - barW / 2;
+
+    // The glass is the part of the expectation not yet spent. Drawn only up
+    // to where the solid begins, so the two never overlap and the column
+    // reads as one object rather than two stacked ones.
+    if (expected > spent) {
+      root.append(svg("rect", {
+        class: "bchart-bar est", x: left, y: y(expected),
+        width: barW, height: y(spent) - y(expected),
+        rx: 3, fill: "url(#barFill)",
+      }));
+    }
+
+    if (spent > 0) {
+      root.append(svg("rect", {
+        class: "bchart-bar actual" + (overBudget ? " over" : ""),
+        x: left, y: y(spent), width: barW, height: base - y(spent), rx: 3,
+      }));
+    }
+
+    // Past what history expected: mark where the expectation was, so the
+    // overshoot is legible rather than merely tall.
+    if (spent > expected && expected > 0) {
+      root.append(svg("line", {
+        class: "bchart-expected-mark", x1: left, x2: left + barW,
+        y1: y(expected), y2: y(expected),
+      }));
+    }
   });
 
   // A budget of nothing is a real answer, so that line is continuous.
@@ -129,7 +164,8 @@ export function budgetChart(items, { onPick, height = H } = {}) {
     const g = svg("g", {
       class: "bchart-point" + (short ? " short" : ""),
       tabindex: onPick ? 0 : null, role: onPick ? "button" : null,
-      "aria-label": `${d.name}: budgeted ${money(d.budgeted)}, `
+      "aria-label": `${d.name}: spent ${money(d.actual || 0)}, `
+                  + `budgeted ${money(d.budgeted)}, `
                   + `estimated ${money(d.estimate)}`
                   + (d.recommended !== null && d.recommended !== undefined
                      ? `, recommended ${money(d.recommended)}`

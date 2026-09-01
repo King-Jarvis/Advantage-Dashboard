@@ -11,6 +11,7 @@ import json
 import mimetypes
 import os
 import re
+import sqlite3
 import traceback
 import urllib.parse
 from http.cookies import SimpleCookie
@@ -46,6 +47,11 @@ ROUTES = [
     ("overview", {"GET"},         re.compile(r"^/api/view/overview$"),     "session"),
     ("history",  {"GET"},         re.compile(r"^/api/view/history$"),      "session"),
     ("coverage", {"GET"},         re.compile(r"^/api/view/coverage$"),     "session"),
+    ("txns",     {"GET"},         re.compile(r"^/api/view/transactions$"),  "session"),
+    ("cats",     {"GET", "POST"}, re.compile(r"^/api/categories$"),        "session"),
+    ("cat",      {"PATCH", "DELETE"},
+     re.compile(r"^/api/categories/([0-9a-f]{32})$"), "session"),
+    ("groups",   {"GET", "POST"}, re.compile(r"^/api/category-groups$"),   "session"),
     ("setbudget", {"PATCH"},
      re.compile(r"^/api/edit/budget/(\d{4}-\d{2})/([0-9a-f]{32})$"), "session"),
     ("movemoney", {"POST"},
@@ -401,6 +407,10 @@ class Handler(BaseHTTPRequestHandler):
                 "recommended": recommended,
                 "estimate": estimate,
                 "activity": ledger.category_activity(conn, c["id"], month),
+                # What has actually gone out this month, as a positive
+                # figure. A net inflow (a refund larger than the spending)
+                # clamps to zero rather than drawing a bar below the axis.
+                "actual": max(0, -ledger.category_activity(conn, c["id"], month)),
                 "balance": ledger.category_balance(conn, c["id"], month),
                 "kind": a.get("kind", ""),
                 "confidence": a.get("confidence", "none"),
@@ -412,6 +422,7 @@ class Handler(BaseHTTPRequestHandler):
             "to_be_budgeted_cents": ledger.to_be_budgeted(conn, month),
             "budgeted_total_cents": sum(i["budgeted"] for i in items),
             "estimate_total_cents": sum(i["estimate"] for i in items),
+            "actual_total_cents": sum(i["actual"] for i in items),
             "recommended_total_cents": sum(i["recommended"] or 0 for i in items),
             "short_categories": short,
             "items": items,
@@ -462,6 +473,115 @@ class Handler(BaseHTTPRequestHandler):
             "kind": a["kind"], "confidence": a["confidence"],
             "sample_months": a["sample_months"], "basis": a["basis"],
         })
+
+    def api_txns(self, conn, session):
+        """Recent transactions, optionally for one category or month.
+
+        Split children rather than their parents, because the question being
+        asked here is "what did this category buy", and the parent carries no
+        category.
+        """
+        q = self.query()
+        where = ["t.deleted=0"]
+        args = []
+        cat = (q.get("category") or [""])[0]
+        if cat:
+            if not re.fullmatch(r"[0-9a-f]{32}", cat):
+                raise ValueError("category must be an id")
+            where.append("t.category_id=?")
+            args.append(cat)
+        month = (q.get("month") or [""])[0]
+        if month:
+            if not re.fullmatch(r"\d{4}-\d{2}", month):
+                raise ValueError("month must be YYYY-MM")
+            where.append("substr(t.date,1,7)=?")
+            args.append(month)
+        try:
+            limit = max(1, min(200, int((q.get("limit") or ["50"])[0])))
+        except ValueError:
+            raise ValueError("limit must be a number") from None
+
+        rows = conn.execute(
+            "SELECT t.id, t.date, t.amount_cents, t.payee, t.notes, t.cleared,"
+            "       t.source, a.name account, c.name category"
+            " FROM transactions t JOIN accounts a ON a.id = t.account_id"
+            " LEFT JOIN categories c ON c.id = t.category_id"
+            " WHERE " + " AND ".join(where) +
+            " ORDER BY t.date DESC, t.rowid DESC LIMIT ?",
+            [*args, limit]).fetchall()
+        self.json_out({"transactions": [dict(r) for r in rows]})
+
+    def api_groups(self, conn, session):
+        from . import ledger
+        if self.command == "GET":
+            rows = conn.execute(
+                "SELECT id, name, is_income, sort FROM category_groups"
+                " ORDER BY sort, name").fetchall()
+            return self.json_out({"groups": [dict(r) for r in rows]})
+        data = self.body_json()
+        name = str(data.get("name", "")).strip()
+        if not name:
+            raise ValueError("a group needs a name")
+        try:
+            gid = ledger.create_category_group(
+                conn, name, is_income=bool(data.get("is_income")),
+                sort=int(data.get("sort", 0)))
+        except sqlite3.IntegrityError:
+            raise ValueError("a group with that name already exists") from None
+        self.json_out({"id": gid, "name": name}, 201)
+
+    def api_cats(self, conn, session):
+        from . import ledger
+        if self.command == "GET":
+            rows = ledger.list_categories(
+                conn, include_hidden=(self.query().get("hidden") == ["1"]))
+            return self.json_out({"categories": [dict(r) for r in rows]})
+
+        data = self.body_json()
+        name = str(data.get("name", "")).strip()
+        group_id = data.get("group_id")
+        if not name:
+            raise ValueError("a category needs a name")
+        if not isinstance(group_id, str) or not re.fullmatch(r"[0-9a-f]{32}",
+                                                             group_id or ""):
+            raise ValueError("a category needs a group")
+        if conn.execute("SELECT 1 FROM category_groups WHERE id=?",
+                        (group_id,)).fetchone() is None:
+            raise ValueError("no such group")
+        try:
+            cid = ledger.create_category(
+                conn, group_id, name,
+                carryover_negative=bool(data.get("carryover_negative")),
+                sort=int(data.get("sort", 0)))
+        except sqlite3.IntegrityError:
+            raise ValueError("that group already has a category with that name") \
+                from None
+        # A new category is immediately available to the classifier: it reads
+        # the category table directly, so there is nothing else to update.
+        self.json_out({"id": cid, "name": name, "group_id": group_id}, 201)
+
+    def api_cat(self, conn, session, category_id):
+        from . import ledger
+        if self.command == "DELETE":
+            try:
+                outcome = ledger.delete_category(conn, category_id)
+            except KeyError:
+                return self.fail(404, "no such category")
+            # Anything with history is hidden rather than removed, so past
+            # spending keeps its meaning.
+            return self.json_out({"outcome": outcome})
+
+        data = self.body_json()
+        fields = {k: v for k, v in data.items()
+                  if k in ("name", "group_id", "sort", "hidden",
+                           "carryover_negative")}
+        if not fields:
+            raise ValueError("nothing to change")
+        try:
+            ledger.update_category(conn, category_id, **fields)
+        except KeyError:
+            return self.fail(404, "no such category")
+        self.json_out({"id": category_id, "updated": sorted(fields)})
 
     def api_coverage(self, conn, session):
         """Which months have statements behind them, and which do not."""

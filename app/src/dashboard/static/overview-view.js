@@ -41,8 +41,11 @@ export async function overviewView(container, month, { onMonth, onEdit }) {
 
   const legend = el("div", { class: "legend" },
     el("span", { class: "key" },
+      el("span", { class: "swatch act" }),
+      el("span", { text: "spent so far" })),
+    el("span", { class: "key" },
       el("span", { class: "swatch est" }),
-      el("span", { text: "estimated spending" })),
+      el("span", { text: "estimated for the month" })),
     el("span", { class: "key" },
       el("span", { class: "swatch bud" }), el("span", { text: "your budget" })),
     el("span", { class: "key" },
@@ -69,8 +72,10 @@ export async function overviewView(container, month, { onMonth, onEdit }) {
             el("span", { class: `pill ${tone.cls}`, text: tone.says }))),
         stat("budgeted", el("span", { class: "money big",
                                       text: money(d.budgeted_total_cents) })),
-        stat("estimated spend", el("span", { class: "money big muted",
-                                             text: money(d.estimate_total_cents) })),
+        stat("spent so far", el("span", { class: "money big",
+                                          text: money(d.actual_total_cents) })),
+        stat("estimated", el("span", { class: "money big muted",
+                                       text: money(d.estimate_total_cents) })),
         stat("recommended", el("span", { class: "money big muted",
                                          text: money(d.recommended_total_cents) })))));
 

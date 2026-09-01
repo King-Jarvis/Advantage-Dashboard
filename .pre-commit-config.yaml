@@ -16,6 +16,12 @@ repos:
         language: system
         pass_filenames: false
 
+      - id: js-syntax
+        name: front-end modules parse
+        entry: scripts/check-js-syntax.sh
+        language: system
+        pass_filenames: false
+
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.21.2
     hooks:

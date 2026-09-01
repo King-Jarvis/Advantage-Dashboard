@@ -81,6 +81,66 @@ def create_category(conn, group_id, name, is_income=False, sort=0,
     return cid
 
 
+def update_category(conn, category_id, **fields):
+    """Rename, re-group, hide, or change carry-over behaviour.
+
+    Hiding rather than deleting is deliberate. A category with history behind
+    it cannot be removed without either orphaning those transactions or
+    silently rewriting the past; hiding keeps the ledger honest and takes it
+    off the screen, which is what was actually wanted.
+    """
+    allowed = {"name", "group_id", "sort", "hidden", "carryover_negative"}
+    bad = set(fields) - allowed
+    if bad:
+        raise ValueError("cannot update: %s" % ", ".join(sorted(bad)))
+    row = conn.execute("SELECT id FROM categories WHERE id=?",
+                       (category_id,)).fetchone()
+    if row is None:
+        raise KeyError(category_id)
+    if "name" in fields and not str(fields["name"]).strip():
+        raise ValueError("a category needs a name")
+
+    values = [int(v) if k in ("hidden", "carryover_negative", "sort") else v
+              for k, v in fields.items()]
+    sets = ", ".join("%s=?" % k for k in fields)
+    conn.execute("UPDATE categories SET %s WHERE id=?" % sets,
+                 [*values, category_id])
+    _audit(conn, "update", "category", category_id, ",".join(sorted(fields)))
+    conn.commit()
+
+
+def delete_category(conn, category_id):
+    """Remove a category outright, but only while nothing depends on it.
+
+    Anything with history is hidden instead. Deleting it would leave
+    transactions pointing at nothing, and a ledger that loses the meaning of
+    past spending is worse than a slightly longer list.
+    """
+    used = conn.execute(
+        "SELECT COUNT(*) c FROM transactions WHERE category_id=? AND deleted=0",
+        (category_id,)).fetchone()["c"]
+    budgeted = conn.execute(
+        "SELECT COUNT(*) c FROM budget_months WHERE category_id=?"
+        "   AND budgeted_cents <> 0", (category_id,)).fetchone()["c"]
+    if used or budgeted:
+        update_category(conn, category_id, hidden=True)
+        return "hidden"
+    conn.execute("DELETE FROM budget_months WHERE category_id=?", (category_id,))
+    conn.execute("DELETE FROM categories WHERE id=?", (category_id,))
+    _audit(conn, "delete", "category", category_id)
+    conn.commit()
+    return "deleted"
+
+
+def list_categories(conn, include_hidden=False):
+    where = "" if include_hidden else " WHERE c.hidden=0"
+    return conn.execute(
+        "SELECT c.id, c.name, c.group_id, c.is_income, c.sort, c.hidden,"
+        " c.carryover_negative, g.name group_name, g.sort group_sort"
+        " FROM categories c JOIN category_groups g ON g.id = c.group_id"
+        + where + " ORDER BY g.sort, g.name, c.sort, c.name").fetchall()
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  Transactions
 # ═══════════════════════════════════════════════════════════════════════════
