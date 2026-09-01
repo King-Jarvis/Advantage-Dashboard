@@ -26,8 +26,14 @@ PATTERNS=(
 SELF='scripts/check-no-infra-strings.sh'
 status=0
 
-# Only tracked files: an untracked local .env is expected and fine.
-mapfile -t FILES < <(git ls-files | grep -v -x -F "$SELF" || true)
+# Tracked files AND untracked ones git would include -- anything not covered
+# by .gitignore. Scanning only tracked files leaves a hole exactly where it
+# matters: a brand-new file is unchecked until its first commit, by which
+# point the thing this guard exists to prevent has already happened.
+#
+# Ignored files are still skipped, so a local .env stays out of scope.
+mapfile -t FILES < <(git ls-files --cached --others --exclude-standard \
+                     | sort -u | grep -v -x -F "$SELF" || true)
 if [ "${#FILES[@]}" -eq 0 ]; then
   echo "no tracked files to scan"; exit 0
 fi

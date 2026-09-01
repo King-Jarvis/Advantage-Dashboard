@@ -623,13 +623,13 @@ def test_a_stored_secret_is_never_sent_to_the_browser(
     cookie, csrf = login(live)
     h = {"Cookie": cookie, "X-CSRF-Token": csrf}
     status, _, _ = call(live, "PATCH", "/api/settings",
-                        {"anthropic_api_key": "sk-ant-secret-value"}, headers=h)
+                        {"anthropic_api_key": "FAKE-ANTHROPIC-SECRET"}, headers=h)
     assert status == 200
 
     _, _, body = call(live, "GET", "/api/settings", headers={"Cookie": cookie})
     blob = json.dumps(body)
     # Not even an authenticated session can read a credential back out.
-    assert "sk-ant-secret-value" not in blob
+    assert "FAKE-ANTHROPIC-SECRET" not in blob
     item = next(s for s in body["settings"] if s["key"] == "anthropic_api_key")
     assert item["value"] is None and item["is_set"] is True
     crypt.reset_for_tests()
@@ -669,7 +669,7 @@ def test_saving_google_credentials_takes_effect_immediately(live, tmp_path,
 
     status, _, _ = call(live, "PATCH", "/api/settings", {
         "google_client_id": "123456789012-abcdefghijklmnop.apps.googleusercontent.com",
-        "google_client_secret": "GOCSPX-not-a-real-secret",
+        "google_client_secret": "FAKE-GOOGLE-SECRET",
     }, headers=h)
     assert status == 200
 
@@ -688,11 +688,11 @@ def test_the_check_never_echoes_the_secret(live, tmp_path, monkeypatch):
     crypt.reset_for_tests()
     cookie, csrf = login(live)
     call(live, "PATCH", "/api/settings",
-         {"google_client_secret": "GOCSPX-super-secret"},
+         {"google_client_secret": "FAKE-GOOGLE-SECRET-2"},
          headers={"Cookie": cookie, "X-CSRF-Token": csrf})
     _, _, body = call(live, "GET", "/api/google/check",
                       headers={"Cookie": cookie})
-    assert "GOCSPX-super-secret" not in json.dumps(body)
+    assert "FAKE-GOOGLE-SECRET-2" not in json.dumps(body)
     assert body["has_client_secret"] is True
     crypt.reset_for_tests()
 
