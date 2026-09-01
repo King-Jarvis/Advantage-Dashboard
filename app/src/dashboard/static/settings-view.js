@@ -8,7 +8,7 @@
  * that a key is set and offer to replace it, but never reveal it -- which
  * also means a stolen session cannot harvest credentials.
  */
-import { del, get, patch } from "./api.js";
+import { del, get, patch, post } from "./api.js";
 import { el, mount } from "./dom.js";
 
 const GROUPS = [
@@ -87,7 +87,30 @@ function accountsSection(refresh) {
       a.last_error
         ? el("div", { class: "hint err", text: `last sync: ${a.last_error}` })
         : null),
-    el("div", { class: "setcontrol" },
+    el("div", { class: "setcontrol row" },
+      // The same work the scheduler does, for when waiting a quarter of an
+      // hour to find out whether a reconnect worked is silly.
+      el("button", { class: "btn", type: "button", text: "Sync now",
+        onclick: async (e) => {
+          const b = e.currentTarget;
+          const was = b.textContent;
+          b.disabled = true; b.textContent = "Syncing\u2026";
+          try {
+            const r = await post("/api/action/sync", { account_id: a.id });
+            const mine = (r.results || [])[0] || {};
+            b.textContent = mine.ok
+              ? `${mine.events} events, ${mine.messages} mail`
+              : "failed";
+          } catch (err) {
+            b.textContent = "failed";
+          } finally {
+            // Leave the outcome on the button long enough to read, then
+            // reload so any recorded error appears in its own row.
+            window.setTimeout(() => {
+              b.disabled = false; b.textContent = was; refresh();
+            }, 2500);
+          }
+        } }),
       el("button", { class: "btn danger", type: "button", text: "Disconnect",
         onclick: async () => {
           if (!window.confirm(`Disconnect ${a.email}?`)) return;

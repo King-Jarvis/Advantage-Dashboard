@@ -27,6 +27,7 @@ from . import (
     statements,
     stats,
     storage,
+    sync,
 )
 
 PACKAGE = os.path.dirname(os.path.abspath(__file__))
@@ -76,6 +77,11 @@ ROUTES = [
     ("ing_ev",   {"POST"},        re.compile(r"^/api/ingest/events$"),     "ingest"),
     ("ing_msg",  {"POST"},        re.compile(r"^/api/ingest/messages$"),   "ingest"),
     ("ing_sync", {"POST"},        re.compile(r"^/api/ingest/sync$"),       "ingest"),
+    # Same work, two doors: the scheduler comes in with the ingest key,
+    # the "Sync now" button comes in with a session. Neither door opens
+    # the other, so a leaked ingest key still cannot read the dashboard.
+    ("sync_ing", {"POST"},        re.compile(r"^/api/sync/google$"),       "ingest"),
+    ("sync_ses", {"POST"},        re.compile(r"^/api/action/sync$"),       "session"),
     ("history",  {"GET"},         re.compile(r"^/api/view/history$"),      "session"),
     ("coverage", {"GET"},         re.compile(r"^/api/view/coverage$"),     "session"),
     ("txns",     {"GET"},         re.compile(r"^/api/view/transactions$"),  "session"),
@@ -497,6 +503,35 @@ class Handler(BaseHTTPRequestHandler):
         feeds.note_sync(conn, "mail:" + account, "ok",
                         cursor=str(data.get("cursor") or "") or None)
         self.json_out({"written": written, "skipped_local_edits": skipped})
+
+    def _run_sync(self, conn, data):
+        if not isinstance(data, dict):
+            raise ValueError("body must be an object")
+        account = str(data.get("account_id") or "") or None
+        try:
+            days = max(1, min(90, int(data.get("days_ahead", 21))))
+        except (TypeError, ValueError):
+            days = 21
+        result = sync.run(conn, account_id=account, days_ahead=days)
+        # A partial failure is still a 200: the caller asked for a sync and
+        # got one, and the body says exactly which account did not answer.
+        # Failing the whole call would make a scheduler retry the accounts
+        # that already succeeded.
+        self.json_out(result)
+
+    def api_sync_ing(self, conn, session):
+        """The scheduled entry point. No Google credential crosses this line.
+
+        A workflow engine authenticates with the ingest key and asks for a
+        sync; this process holds the refresh token, talks to Google, and
+        returns counts. The scheduler never sees a token, so a compromised
+        scheduler cannot read the mailbox it triggers.
+        """
+        self._run_sync(conn, self.body_json())
+
+    def api_sync_ses(self, conn, session):
+        """The "Sync now" button, for when waiting for the schedule is silly."""
+        self._run_sync(conn, self.body_json())
 
     def api_ing_sync(self, conn, session):
         """Let a workflow report its own failure.

@@ -1,0 +1,125 @@
+{
+  "name": "Dashboard — Google sync",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [ { "field": "minutes", "minutesInterval": 15 } ] }
+      },
+      "id": "trigger",
+      "name": "Every 15 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [ 260, 300 ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DASHBOARD_URL }}/api/sync/google",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-Ingest-Key", "value": "={{ $env.DASHBOARD_INGEST_KEY }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"days_ahead\": 21}",
+        "options": {
+          "timeout": 120000,
+          "response": { "response": { "neverError": true, "fullResponse": true } }
+        }
+      },
+      "id": "sync",
+      "name": "Ask the dashboard to sync",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 520, 300 ],
+      "notes": "No Google credential here on purpose. This asks the dashboard to sync; the dashboard holds the refresh token and talks to Google. A stolen ingest key can trigger a sync and nothing else."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "version": 2 },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.statusCode }}",
+              "rightValue": 200,
+              "operator": { "type": "number", "operation": "equals" }
+            },
+            {
+              "leftValue": "={{ $json.body.ok }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ok",
+      "name": "Did every account answer?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [ 780, 300 ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DASHBOARD_URL }}/api/ingest/sync",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-Ingest-Key", "value": "={{ $env.DASHBOARD_INGEST_KEY }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"source\": \"n8n:google-sync\", \"status\": \"ok\"}",
+        "options": {}
+      },
+      "id": "note_ok",
+      "name": "Record a good run",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 1040, 200 ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DASHBOARD_URL }}/api/ingest/sync",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-Ingest-Key", "value": "={{ $env.DASHBOARD_INGEST_KEY }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"source\": \"n8n:google-sync\", \"status\": \"error\", \"error\": {{ JSON.stringify(($json.body && ($json.body.error || JSON.stringify($json.body.results))) || ('HTTP ' + $json.statusCode)) }} }",
+        "options": {}
+      },
+      "id": "note_bad",
+      "name": "Record the failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [ 1040, 400 ],
+      "notes": "A feed that has stopped is invisible otherwise: the screen keeps showing the last data it received and nothing says it is stale. Writing the failure back is what turns silence into a visible warning."
+    }
+  ],
+  "connections": {
+    "Every 15 minutes": {
+      "main": [ [ { "node": "Ask the dashboard to sync", "type": "main", "index": 0 } ] ]
+    },
+    "Ask the dashboard to sync": {
+      "main": [ [ { "node": "Did every account answer?", "type": "main", "index": 0 } ] ]
+    },
+    "Did every account answer?": {
+      "main": [
+        [ { "node": "Record a good run", "type": "main", "index": 0 } ],
+        [ { "node": "Record the failure", "type": "main", "index": 0 } ]
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1", "saveDataSuccessExecution": "none" },
+  "pinData": {}
+}

@@ -953,3 +953,82 @@ def test_a_workflow_can_report_its_own_failure(live, monkeypatch):
     # A feed that stops must be visible, not just quiet.
     assert st["sources"][0]["last_error"] == "invalid_grant"
     del os.environ["INGEST_KEY"]
+
+
+# ── the scheduler's door ──────────────────────────────────────────────────
+def test_sync_route_takes_the_ingest_key_and_refuses_a_session(live, tmp_path,
+                                                               monkeypatch):
+    """The whole point of the design: n8n gets a key that triggers a sync and
+    can do nothing else. If a session also opened this route, a stolen ingest
+    key and a stolen cookie would be interchangeable."""
+    import os
+
+    from dashboard import crypt
+    _google_account(tmp_path, monkeypatch)
+    os.environ["INGEST_KEY"] = "test-ingest-key"
+
+    cookie, csrf = login(live)
+    status, _, _ = call(live, "POST", "/api/sync/google", {},
+                        headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+    assert status == 401, "a browser session reached the scheduler's route"
+
+    status, _, _ = call(live, "POST", "/api/sync/google", {},
+                        headers={"X-Ingest-Key": "wrong"})
+    assert status == 401
+
+    del os.environ["INGEST_KEY"]
+    crypt.reset_for_tests()
+
+
+def test_sync_now_button_takes_a_session_and_refuses_the_ingest_key(
+        live, tmp_path, monkeypatch):
+    import os
+
+    from dashboard import crypt
+    _google_account(tmp_path, monkeypatch)
+    os.environ["INGEST_KEY"] = "test-ingest-key"
+
+    status, _, _ = call(live, "POST", "/api/action/sync", {},
+                        headers={"X-Ingest-Key": "test-ingest-key"})
+    assert status == 401, "an ingest key reached a browser route"
+
+    del os.environ["INGEST_KEY"]
+    crypt.reset_for_tests()
+
+
+def test_sync_with_no_connected_account_is_reported_not_crashed(live,
+                                                                monkeypatch):
+    import os
+    os.environ["INGEST_KEY"] = "test-ingest-key"
+    status, _, body = call(live, "POST", "/api/sync/google", {},
+                           headers={"X-Ingest-Key": "test-ingest-key"})
+    # A scheduler needs a parseable answer, not a 500 it can only log.
+    assert status == 200 and body["ok"] is False
+    assert "no connected" in body["error"]
+    del os.environ["INGEST_KEY"]
+
+
+def test_sync_reports_a_partial_failure_as_200_with_detail(live, tmp_path,
+                                                           monkeypatch):
+    """A partial failure must not fail the whole call: retrying would re-run
+    the accounts that already succeeded."""
+    import os
+
+    from dashboard import crypt, google_api
+    _google_account(tmp_path, monkeypatch)
+    os.environ["INGEST_KEY"] = "test-ingest-key"
+
+    def boom(*a, **k):
+        raise google_api.GoogleError("revoked")
+
+    monkeypatch.setattr(google_api, "fetch_events", boom)
+    status, _, body = call(live, "POST", "/api/sync/google", {},
+                           headers={"X-Ingest-Key": "test-ingest-key"})
+    assert status == 200 and body["ok"] is False
+    assert body["results"][0]["ok"] is False
+    # The reason reaches the caller, but no token does.
+    assert "revoked" in body["results"][0]["error"]
+    assert "FAKE-REFRESH" not in str(body)
+
+    del os.environ["INGEST_KEY"]
+    crypt.reset_for_tests()
