@@ -638,3 +638,46 @@ a:hover { text-decoration: underline; }
   .setrow { grid-template-columns: 1fr; gap: var(--s2); }
   .setcontrol { justify-content: flex-start; }
 }
+
+/* ── Import ─────────────────────────────────────────────────────────────── */
+.implist { max-height: 46vh; overflow: auto; }
+.improw {
+  display: flex; align-items: center; gap: var(--s3);
+  padding: var(--s2) var(--s4) var(--s2) calc(var(--s4) + var(--bar));
+  border-bottom: 1px solid var(--line);
+}
+.improw:last-child { border-bottom: 0; }
+/* An excluded row stays visible but recedes: seeing what will not be
+ * imported is the point of the screen. */
+.improw.off { opacity: 0.45; }
+.improw .impdate {
+  font-family: var(--mono); color: var(--text-3); flex: none;
+}
+.improw .imppayee { min-width: 0; }
+.improw .imppayee, .improw .imppayee > * {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.improw .catsel { width: 200px; flex: none; }
+.improw .impamt { flex: none; width: 110px; text-align: right; }
+
+/* ── Coverage strip ─────────────────────────────────────────────────────── */
+.covstrip { display: flex; gap: 3px; flex-wrap: wrap; }
+.covcell {
+  flex: 1 0 46px; min-width: 46px; padding: var(--s2) 2px;
+  text-align: center; border-radius: var(--r-sm);
+  background: var(--info-tint); border: 1px solid transparent;
+}
+/* A month with no statement is not a month with no spending, and the engine
+ * refuses to average over it -- so it is marked, not merely absent. */
+.covcell.gap {
+  background: transparent; border-color: var(--warn);
+  border-style: dashed;
+}
+.covmonth { font-family: var(--mono); font-size: var(--t-micro); color: var(--text-3); }
+.warnline { color: var(--warn); }
+
+@media (max-width: 900px) {
+  .improw { flex-wrap: wrap; }
+  .improw .catsel { width: 100%; }
+  .improw .impamt { margin-left: auto; }
+}

@@ -11,6 +11,7 @@ import { budgetView } from "./budget-view.js";
 import { overviewView } from "./overview-view.js";
 import { homeView } from "./home-view.js";
 import { settingsView } from "./settings-view.js";
+import { importView } from "./import-view.js";
 
 const root = document.getElementById("root");
 
@@ -19,6 +20,7 @@ const VIEWS = [
   { id: "agenda", label: "Agenda", kind: "agenda" },
   { id: "inbox",  label: "Inbox",  kind: "inbox" },
   { id: "budget", label: "Budget", kind: "budget" },
+  { id: "import", label: "Import", kind: "budget" },
   { id: "settings", label: "Settings", kind: "system" },
 ];
 
@@ -144,6 +146,17 @@ async function render() {
         return;
       }
       mount(body, placeholder("system", "Home", "Could not load the summary"));
+    }
+  } else if (state.view === "import") {
+    try {
+      await importView(body, { onGo: (v) => go({ view: v }) });
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        state.user = null;
+        await render();
+        return;
+      }
+      mount(body, placeholder("budget", "Import", "Could not load the importer"));
     }
   } else if (state.view === "settings") {
     try {

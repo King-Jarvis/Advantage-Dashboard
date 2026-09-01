@@ -61,6 +61,12 @@ ROUTES = [
     ("history",  {"GET"},         re.compile(r"^/api/view/history$"),      "session"),
     ("coverage", {"GET"},         re.compile(r"^/api/view/coverage$"),     "session"),
     ("txns",     {"GET"},         re.compile(r"^/api/view/transactions$"),  "session"),
+    ("upload",   {"POST"},        re.compile(r"^/api/import/upload$"),     "session"),
+    ("batches",  {"GET"},         re.compile(r"^/api/import/batches$"),    "session"),
+    ("batch",    {"GET", "POST", "DELETE"},
+     re.compile(r"^/api/import/batch/([0-9a-f]{32})$"), "session"),
+    ("batchrow", {"PATCH"},
+     re.compile(r"^/api/import/row/([0-9a-f]{32})$"), "session"),
     ("cats",     {"GET", "POST"}, re.compile(r"^/api/categories$"),        "session"),
     ("cat",      {"PATCH", "DELETE"},
      re.compile(r"^/api/categories/([0-9a-f]{32})$"), "session"),
@@ -577,6 +583,138 @@ class Handler(BaseHTTPRequestHandler):
             "kind": a["kind"], "confidence": a["confidence"],
             "sample_months": a["sample_months"], "basis": a["basis"],
         })
+
+    # How much of an over-sized upload to swallow so the client can finish
+    # sending and read the refusal. Bounded, because draining an unbounded
+    # body on request is a way to be kept busy for free.
+    DRAIN_CAP = 24 * 1024 * 1024
+
+    def _raw_body(self, limit):
+        """Read a raw upload, refusing anything over `limit`.
+
+        Refusing before reading is the obvious implementation and it produces
+        a broken pipe: the client is still writing when the response arrives,
+        so its send fails and the browser reports a network error rather than
+        the perfectly good message explaining the file is too large.
+
+        So an over-sized body is drained first, up to a cap, and then
+        refused -- and beyond that cap the connection is closed, because at
+        that point the sender is not a browser with a large statement.
+        """
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0:
+            raise ValueError("no file was sent")
+        if length > limit:
+            if length <= self.DRAIN_CAP:
+                remaining = length
+                while remaining > 0:
+                    chunk = self.rfile.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+            else:
+                self.close_connection = True
+            raise ValueError("file is larger than %d MB"
+                             % (limit // 1024 // 1024))
+        return self.rfile.read(length)
+
+    def api_upload(self, conn, session):
+        """Parse a statement into a reviewable batch. Writes nothing yet.
+
+        The file arrives as a raw body with the account and filename in the
+        query string, rather than as multipart. Multipart would mean parsing
+        a format designed for 1995 in order to move one file, and the browser
+        can send the bytes directly.
+        """
+        from . import categorize
+        from . import statements as st
+        q = self.query()
+        account = (q.get("account") or [""])[0]
+        if not re.fullmatch(r"[0-9a-f]{32}", account):
+            raise ValueError("an account is required")
+        if conn.execute("SELECT 1 FROM accounts WHERE id=?",
+                        (account,)).fetchone() is None:
+            raise ValueError("no such account")
+        filename = (q.get("filename") or ["statement"])[0][:200]
+
+        blob = self._raw_body(st.MAX_BYTES)
+        try:
+            batch_id, meta = st.create_batch(conn, account, filename, blob)
+        except st.ParseError as e:
+            # The message names the column or value that failed, which is the
+            # only thing that makes a rejected statement fixable.
+            return self.fail(400, str(e))
+
+        # Suggest categories from your own history. The model is only
+        # consulted if it is switched on and configured.
+        use_model = settings.get(conn, "enable_llm_categories")
+        if use_model:
+            os.environ["ANTHROPIC_API_KEY"] = settings.get(conn, "anthropic_api_key")
+            os.environ["CLASSIFY_MODEL"] = settings.get(conn, "classify_model")
+        try:
+            categorize.apply_to_batch(conn, batch_id, use_model=bool(use_model))
+        except Exception as e:
+            # A classifier failure must not lose a parsed statement.
+            storage.log("categorise on import failed: %s" % type(e).__name__)
+
+        b = st.batch(conn, batch_id)
+        self.json_out({"batch_id": batch_id, "state": b["state"],
+                       "rows_total": b["rows_total"],
+                       "rows_duplicate": b["rows_duplicate"],
+                       "period": [b["period_start"], b["period_end"]],
+                       "kind": meta.get("kind"),
+                       "date_format": meta.get("date_format"),
+                       "mapping": meta.get("mapping"),
+                       "fingerprint": meta.get("fingerprint")}, 201)
+
+    def api_batches(self, conn, session):
+        rows = conn.execute(
+            "SELECT b.id, b.filename, b.uploaded_at, b.period_start,"
+            " b.period_end, b.rows_total, b.rows_duplicate, b.rows_imported,"
+            " b.state, a.name account FROM import_batches b"
+            " JOIN accounts a ON a.id = b.account_id"
+            " ORDER BY b.uploaded_at DESC LIMIT 25").fetchall()
+        self.json_out({"batches": [dict(r) for r in rows]})
+
+    def api_batch(self, conn, session, batch_id):
+        from . import statements as st
+        b = st.batch(conn, batch_id)
+        if b is None:
+            return self.fail(404, "no such batch")
+
+        if self.command == "GET":
+            return self.json_out({
+                "batch": dict(b),
+                "rows": [dict(r) for r in st.batch_rows(conn, batch_id)]})
+
+        if self.command == "DELETE":
+            st.discard_batch(conn, batch_id)
+            return self.json_out({"discarded": True})
+
+        # POST commits it.
+        data = self.body_json() or {}
+        if data.get("remember_mapping") and b["fingerprint"]:
+            conn.execute(
+                "UPDATE bank_mappings SET label=? WHERE fingerprint=?",
+                (str(data.get("label", ""))[:80], b["fingerprint"]))
+            conn.commit()
+        written = st.commit_batch(conn, batch_id)
+        self.json_out({"imported": written,
+                       "coverage": st.coverage(conn, b["account_id"]),
+                       "gaps": st.gaps(conn, b["account_id"])})
+
+    def api_batchrow(self, conn, session, row_id):
+        from . import statements as st
+        data = self.body_json()
+        fields = {k: v for k, v in data.items()
+                  if k in ("excluded", "category_id", "payee", "notes")}
+        if not fields:
+            raise ValueError("nothing to change")
+        try:
+            st.set_row(conn, row_id, **fields)
+        except ValueError as e:
+            return self.fail(400, str(e))
+        self.json_out({"id": row_id, "updated": sorted(fields)})
 
     def api_txns(self, conn, session):
         """Recent transactions, optionally for one category or month.

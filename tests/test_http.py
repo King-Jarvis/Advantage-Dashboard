@@ -700,3 +700,143 @@ def test_the_check_never_echoes_the_secret(live, tmp_path, monkeypatch):
 def test_the_check_needs_a_session(live):
     status, _, _ = call(live, "GET", "/api/google/check")
     assert status == 401
+
+
+# ── statement import ──────────────────────────────────────────────────────
+CSV_UPLOAD = (b"Date,Description,Amount\n"
+              b"2026-09-04,SUPERSTORE 991,-42.15\n"
+              b"2026-09-05,PAYROLL ACME,2500.00\n"
+              b"2026-09-06,SUPERSTORE 991,-18.40\n")
+
+
+def _account(name="Checking"):
+    from dashboard import ledger, storage
+    conn = storage.connect()
+    aid = ledger.create_account(conn, name)
+    conn.close()
+    return aid
+
+
+def upload(port, cookie, csrf, account, body=CSV_UPLOAD, filename="sep.csv"):
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    c.request("POST",
+              f"/api/import/upload?account={account}&filename={filename}",
+              body=body,
+              headers={"Cookie": cookie, "X-CSRF-Token": csrf,
+                       "Content-Type": "text/csv"})
+    r = c.getresponse()
+    raw = r.read()
+    return r.status, json.loads(raw) if raw else None
+
+
+def test_uploading_parses_but_writes_nothing_to_the_ledger(live):
+    from dashboard import ledger, storage
+    cookie, csrf = login(live)
+    acct = _account()
+    status, body = upload(live, cookie, csrf, acct)
+    assert status == 201
+    assert body["rows_total"] == 3
+
+    conn = storage.connect()
+    assert ledger.account_balance(conn, acct) == 0, "review comes before writing"
+    conn.close()
+
+
+def test_committing_writes_the_rows(live):
+    from dashboard import ledger, storage
+    cookie, csrf = login(live)
+    acct = _account()
+    _, body = upload(live, cookie, csrf, acct)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    status, _, res = call(live, "POST", f"/api/import/batch/{body['batch_id']}",
+                          {}, headers=h)
+    assert status == 200 and res["imported"] == 3
+
+    conn = storage.connect()
+    assert ledger.account_balance(conn, acct) == -4215 + 250000 - 1840
+    conn.close()
+
+
+def test_a_row_can_be_excluded_before_committing(live):
+    cookie, csrf = login(live)
+    acct = _account()
+    _, body = upload(live, cookie, csrf, acct)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    _, _, detail = call(live, "GET", f"/api/import/batch/{body['batch_id']}",
+                        headers={"Cookie": cookie})
+    row = detail["rows"][0]
+    call(live, "PATCH", f"/api/import/row/{row['id']}",
+         {"excluded": True}, headers=h)
+    _, _, res = call(live, "POST", f"/api/import/batch/{body['batch_id']}",
+                     {}, headers=h)
+    assert res["imported"] == 2
+
+
+def test_discarding_leaves_nothing_behind(live):
+    from dashboard import ledger, storage
+    cookie, csrf = login(live)
+    acct = _account()
+    _, body = upload(live, cookie, csrf, acct)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    call(live, "DELETE", f"/api/import/batch/{body['batch_id']}", headers=h)
+    _, _, detail = call(live, "GET", f"/api/import/batch/{body['batch_id']}",
+                        headers={"Cookie": cookie})
+    assert detail["rows"] == []
+    conn = storage.connect()
+    assert ledger.account_balance(conn, acct) == 0
+    conn.close()
+
+
+def test_the_second_upload_of_a_file_flags_every_row(live):
+    cookie, csrf = login(live)
+    acct = _account()
+    _, first = upload(live, cookie, csrf, acct)
+    call(live, "POST", f"/api/import/batch/{first['batch_id']}", {},
+         headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+    _, second = upload(live, cookie, csrf, acct)
+    assert second["rows_duplicate"] == second["rows_total"]
+
+
+def test_an_unparseable_file_is_refused_with_a_reason(live):
+    cookie, csrf = login(live)
+    acct = _account()
+    status, body = upload(live, cookie, csrf, acct,
+                          body=b"just,some,columns\n1,2,3\n")
+    # The message has to name what failed, or a rejected statement is a dead
+    # end rather than something to fix.
+    assert status == 400
+    assert "date" in body["error"].lower()
+
+
+def test_upload_requires_a_real_account(live):
+    cookie, csrf = login(live)
+    for acct in ("", "nope", "f" * 32):
+        status, _ = upload(live, cookie, csrf, acct)
+        assert status == 400, acct
+
+
+def test_an_oversized_upload_is_refused(live):
+    from dashboard import statements as st
+    cookie, csrf = login(live)
+    acct = _account()
+    status, _ = upload(live, cookie, csrf, acct,
+                       body=b"x" * (st.MAX_BYTES + 10))
+    assert status == 400
+
+
+def test_import_endpoints_are_closed_to_anonymous_callers(live):
+    acct = _account()
+    c = http.client.HTTPConnection("127.0.0.1", live, timeout=10)
+    c.request("POST", f"/api/import/upload?account={acct}", body=b"x")
+    assert c.getresponse().status == 401
+    status, _, _ = call(live, "GET", "/api/import/batches")
+    assert status == 401
+
+
+def test_committing_needs_csrf(live):
+    cookie, csrf = login(live)
+    acct = _account()
+    _, body = upload(live, cookie, csrf, acct)
+    status, _, _ = call(live, "POST", f"/api/import/batch/{body['batch_id']}",
+                        {}, headers={"Cookie": cookie})
+    assert status == 403

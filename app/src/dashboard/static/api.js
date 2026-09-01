@@ -21,8 +21,16 @@ export async function api(method, path, body) {
   const headers = {};
   let payload;
   if (body !== undefined) {
-    headers["Content-Type"] = "application/json";
-    payload = JSON.stringify(body);
+    // Binary bodies pass through untouched. JSON.stringify on an ArrayBuffer
+    // yields "{}", which is a silent, empty upload rather than an error --
+    // the file appears to send and nothing arrives.
+    if (body instanceof ArrayBuffer || ArrayBuffer.isView(body)) {
+      headers["Content-Type"] = "application/octet-stream";
+      payload = body;
+    } else {
+      headers["Content-Type"] = "application/json";
+      payload = JSON.stringify(body);
+    }
   }
   if (method !== "GET" && method !== "HEAD" && csrfToken) {
     headers["X-CSRF-Token"] = csrfToken;
