@@ -41,6 +41,8 @@ ROUTES = [
     ("config",   {"GET"},         re.compile(r"^/api/config$"),            "none"),
     ("g_start",  {"GET"},         re.compile(r"^/api/auth/google/start$"),    "none"),
     ("g_cb",     {"GET"},         re.compile(r"^/api/auth/google/callback$"), "none"),
+    ("g_check",  {"GET"},
+     re.compile(r"^/api/google/check$"), "session"),
     ("g_connect", {"GET"},
      re.compile(r"^/api/google/connect$"), "session"),
     ("g_accts",  {"GET"},
@@ -240,7 +242,7 @@ class Handler(BaseHTTPRequestHandler):
         Deliberately says only whether Google sign-in is *available* -- never
         the client id, and never anything about which accounts exist.
         """
-        self.json_out({"google_enabled": auth_google.configured()})
+        self.json_out({"google_enabled": auth_google.configured(conn)})
 
     def _redirect(self, location, extra=None):
         headers = {"Location": location}
@@ -271,7 +273,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._redirect("/?auth=failed")
 
         try:
-            tokens = auth_google.exchange(code, pending["code_verifier"])
+            tokens = auth_google.exchange(code, pending["code_verifier"], conn=conn)
             info = auth_google.identity(tokens["access_token"])
         except auth_google.OAuthError:
             storage.log("google callback: exchange or userinfo failed")
@@ -429,6 +431,13 @@ class Handler(BaseHTTPRequestHandler):
                 over.append({"name": c["name"], "over_cents": -bal})
         over.sort(key=lambda x: -x["over_cents"])
 
+        # A month nobody has budgeted for yet is a different state from one
+        # where nothing has been spent, and the widget must be able to tell
+        # them apart -- "0 of 0, 0%" reads as broken rather than as "not
+        # started".
+        last = conn.execute(
+            "SELECT MAX(month) m FROM budget_months WHERE budgeted_cents <> 0"
+        ).fetchone()["m"]
         budget = {
             "month": month,
             "to_be_budgeted_cents": ledger.to_be_budgeted(conn, month),
@@ -438,6 +447,8 @@ class Handler(BaseHTTPRequestHandler):
             "overspent": over[:3],
             "overspent_count": len(over),
             "has_data": bool(cats),
+            "started": budgeted > 0 or spent > 0,
+            "last_budgeted_month": last,
         }
 
         # ── calendar and mail ─────────────────────────────────────────────
@@ -450,7 +461,7 @@ class Handler(BaseHTTPRequestHandler):
 
         self.json_out({
             "month": month,
-            "google": {"configured": auth_google.configured(),
+            "google": {"configured": auth_google.configured(conn),
                        "connected": connected,
                        "accounts": len(accounts)},
             "budget": budget, "calendar": calendar, "mail": mail,
@@ -597,16 +608,33 @@ class Handler(BaseHTTPRequestHandler):
             [*args, limit]).fetchall()
         self.json_out({"transactions": [dict(r) for r in rows]})
 
+    def api_g_check(self, conn, session):
+        """Report whether Google is usable right now.
+
+        Exists so a credential saved in the interface can be confirmed
+        without restarting anything -- the credentials are read per request,
+        so this reflects the state the next sign-in will actually see.
+        """
+        cid = auth_google.client_id(conn)
+        self.json_out({
+            "configured": auth_google.configured(conn),
+            "has_client_id": bool(cid),
+            "has_client_secret": bool(auth_google.client_secret(conn)),
+            # Enough to spot a wrong project pasted in, without echoing it.
+            "client_id_hint": (cid[:12] + "…" + cid[-18:]) if len(cid) > 34 else cid,
+            "redirect_uri": auth_google.redirect_uri(),
+        })
+
     def api_g_connect(self, conn, session):
         """Begin consent for an account whose mail and calendar we may read."""
-        if not auth_google.configured():
+        if not auth_google.configured(conn):
             raise ValueError("Google is not configured on this deployment")
         url = auth_google.begin(conn, purpose="connect", return_to="/#/settings")
         self._redirect(url)
 
     def api_g_accts(self, conn, session):
         self.json_out({"accounts": settings.list_google_accounts(conn),
-                       "configured": auth_google.configured()})
+                       "configured": auth_google.configured(conn)})
 
     def api_g_acct(self, conn, session, account_id):
         n = settings.disconnect_google(conn, account_id)
@@ -620,7 +648,7 @@ class Handler(BaseHTTPRequestHandler):
                 "settings": settings.all_for_display(conn),
                 "secrets_available": crypt.available(),
                 "google": {
-                    "configured": auth_google.configured(),
+                    "configured": auth_google.configured(conn),
                     "accounts": settings.list_google_accounts(conn),
                 },
             })

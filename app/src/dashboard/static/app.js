@@ -125,7 +125,10 @@ async function render() {
     return;
   }
 
-  const body = el("main", { class: "canvas" });
+  // The home screen fills the page; the others are a reading column.
+  const body = el("main", {
+    class: "canvas" + (state.view === "home" ? " home" : ""),
+  });
   mount(root, topbar(), body);
 
   if (state.view === "home") {

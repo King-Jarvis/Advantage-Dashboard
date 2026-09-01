@@ -640,3 +640,63 @@ def test_disconnecting_an_unknown_google_account_is_404(live):
     status, _, _ = call(live, "DELETE", "/api/google/accounts/" + "a" * 32,
                         headers={"Cookie": cookie, "X-CSRF-Token": csrf})
     assert status == 404
+
+
+# ── credentials take effect without a restart ─────────────────────────────
+def test_saving_google_credentials_takes_effect_immediately(live, tmp_path,
+                                                            monkeypatch):
+    """The whole point of the settings page.
+
+    Credentials are read per request rather than captured at start-up, so a
+    value saved in the interface is live on the next call. Anything else means
+    telling someone to restart a server to finish a form.
+    """
+    from dashboard import crypt
+    key = tmp_path / "k"
+    key.write_text("a-long-random-secret-for-this-test-only")
+    monkeypatch.setenv("TOKEN_KEY_PATH", str(key))
+    monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("GOOGLE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("GOOGLE_CLIENT_SECRET_PATH", raising=False)
+    crypt.reset_for_tests()
+
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+
+    _, _, before = call(live, "GET", "/api/google/check",
+                        headers={"Cookie": cookie})
+    assert before["configured"] is False
+
+    status, _, _ = call(live, "PATCH", "/api/settings", {
+        "google_client_id": "123456789012-abcdefghijklmnop.apps.googleusercontent.com",
+        "google_client_secret": "GOCSPX-not-a-real-secret",
+    }, headers=h)
+    assert status == 200
+
+    _, _, after = call(live, "GET", "/api/google/check",
+                       headers={"Cookie": cookie})
+    assert after["configured"] is True
+    assert after["has_client_id"] and after["has_client_secret"]
+    crypt.reset_for_tests()
+
+
+def test_the_check_never_echoes_the_secret(live, tmp_path, monkeypatch):
+    from dashboard import crypt
+    key = tmp_path / "k"
+    key.write_text("another-long-random-secret-value-here")
+    monkeypatch.setenv("TOKEN_KEY_PATH", str(key))
+    crypt.reset_for_tests()
+    cookie, csrf = login(live)
+    call(live, "PATCH", "/api/settings",
+         {"google_client_secret": "GOCSPX-super-secret"},
+         headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+    _, _, body = call(live, "GET", "/api/google/check",
+                      headers={"Cookie": cookie})
+    assert "GOCSPX-super-secret" not in json.dumps(body)
+    assert body["has_client_secret"] is True
+    crypt.reset_for_tests()
+
+
+def test_the_check_needs_a_session(live):
+    status, _, _ = call(live, "GET", "/api/google/check")
+    assert status == 401

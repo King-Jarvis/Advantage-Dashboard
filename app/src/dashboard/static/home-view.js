@@ -43,17 +43,28 @@ function budgetWidget(b, onGo) {
   const pct = b.budgeted_cents > 0
     ? Math.min(100, Math.round((b.spent_cents / b.budgeted_cents) * 100)) : 0;
 
-  return widget("budget", "Budget", goto("Open", onGo, "budget"),
+  // Nothing assigned and nothing spent this month is "not started yet", not
+  // "0 of 0". Saying the first invites the obvious next action; the second
+  // just looks broken.
+  const progress = b.started
+    ? el("div", { class: "wline" },
+        el("span", { class: "hint",
+          text: `${money(b.spent_cents)} spent of ${money(b.budgeted_cents)} budgeted` }),
+        el("span", { class: "hint", text: `${pct}%` }))
+    : el("div", { class: "wline" },
+        el("span", { class: "hint",
+          text: `Nothing budgeted for ${b.month} yet`
+              + (b.last_budgeted_month && b.last_budgeted_month !== b.month
+                 ? ` — last set up in ${b.last_budgeted_month}` : "") }));
+
+  return widget("budget", `Budget · ${b.month}`, goto("Open", onGo, "budget"),
     el("div", { class: "wstat" },
       el("span", { class: "stat-label", text: "to be budgeted" }),
       el("div", { class: "row" },
         moneyEl(tbb, "big"),
         el("span", { class: `pill ${tone}`,
           text: tbb === 0 ? "all assigned" : tbb > 0 ? "unassigned" : "over" }))),
-    el("div", { class: "wline" },
-      el("span", { class: "hint",
-        text: `${money(b.spent_cents)} spent of ${money(b.budgeted_cents)} budgeted` }),
-      el("span", { class: "hint", text: `${pct}%` })),
+    progress,
     b.overspent_count
       ? el("div", { class: "wlist" },
           ...b.overspent.map((o) => el("div", { class: "wrow" },

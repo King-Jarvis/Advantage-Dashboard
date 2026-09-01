@@ -58,6 +58,9 @@
   /* One scale. Any padding or gap not from this list is a mistake. */
   --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 16px;
   --s5: 24px; --s6: 32px; --s7: 48px; --s8: 64px;
+  /* Ma scales with the screen too: fixed padding that reads as generous on a
+   * small panel reads as cramped on a large one. */
+  --gutter: clamp(12px, 1.1vw + 6px, 32px);
 
   /* ── Shape ──────────────────────────────────────────────────────────── */
   --r-sm: 4px;  --r: 8px;  --r-lg: 12px;  --r-pill: 999px;
@@ -71,8 +74,20 @@
   --mono: ui-monospace, "JetBrains Mono", "SFMono-Regular", Menlo,
           "DejaVu Sans Mono", monospace;
 
-  --t-micro: 11px; --t-label: 12px; --t-body: 14px;
-  --t-lg: 17px;    --t-xl: 22px;    --t-hero: 34px;
+  /* Fluid rather than stepped. The dashboard has to be legible on a 7-inch
+   * panel at arm's length and on a large display across a room, and those
+   * are the same requirement at different scales -- not two layouts. clamp
+   * interpolates between them continuously, so there is no width at which
+   * the type is momentarily wrong on the way to being right.
+   *
+   * The lower bound is set by the small panel, the upper by the point past
+   * which larger text stops adding legibility and starts wasting the screen. */
+  --t-micro: clamp(11px, 0.28vw + 9.4px,  14px);
+  --t-label: clamp(12px, 0.32vw + 10.2px, 16px);
+  --t-body:  clamp(15px, 0.42vw + 12.6px, 20px);
+  --t-lg:    clamp(18px, 0.62vw + 14.5px, 26px);
+  --t-xl:    clamp(22px, 0.95vw + 16.9px, 34px);
+  --t-hero:  clamp(34px, 2.4vw + 19.6px,  64px);
 
   --track: 0.08em;            /* letter-spacing for small caps labels */
 

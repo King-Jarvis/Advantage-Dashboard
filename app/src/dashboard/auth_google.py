@@ -46,16 +46,38 @@ class OAuthError(Exception):
 
 
 # ── configuration ─────────────────────────────────────────────────────────
-def client_id():
-    return os.environ.get("GOOGLE_CLIENT_ID", "")
+def _from_settings(conn, key):
+    """A value saved through the settings page, if there is one.
 
-
-def client_secret():
-    """Read from a file, never an environment value.
-
-    An env var is visible to anything that can run `docker inspect` or read
-    /proc/<pid>/environ; a file mounted at /run/secrets is not.
+    Checked before the environment so a credential entered in the interface
+    takes effect on the next request rather than the next restart. Imported
+    lazily: settings imports crypt, and dragging that into every module that
+    merely wants a client id would be a needless coupling.
     """
+    if conn is None:
+        return ""
+    try:
+        from . import settings as _settings
+        return _settings.get(conn, key) or ""
+    except Exception:
+        return ""
+
+
+def client_id(conn=None):
+    return _from_settings(conn, "google_client_id") \
+        or os.environ.get("GOOGLE_CLIENT_ID", "")
+
+
+def client_secret(conn=None):
+    """Settings first, then a file, and only then an environment value.
+
+    A value stored through the settings page is encrypted at rest. A file is
+    next best. An environment value is last because it is visible to anything
+    that can run `docker inspect` or read /proc/<pid>/environ.
+    """
+    saved = _from_settings(conn, "google_client_secret")
+    if saved:
+        return saved
     path = os.environ.get("GOOGLE_CLIENT_SECRET_PATH", "")
     if path and os.path.exists(path):
         with open(path) as fh:
@@ -68,8 +90,8 @@ def redirect_uri():
     return base + "/api/auth/google/callback"
 
 
-def configured():
-    return bool(client_id() and client_secret())
+def configured(conn=None):
+    return bool(client_id(conn) and client_secret(conn))
 
 
 def allowed_subs():
@@ -137,7 +159,7 @@ def _get_json(url, access_token):
 # ── flow ──────────────────────────────────────────────────────────────────
 def begin(conn, purpose="signin", return_to="/"):
     """Create a pending authorisation and return the URL to send the user to."""
-    if not configured():
+    if not configured(conn):
         raise OAuthError("Google sign-in is not configured")
     if purpose not in ("signin", "connect"):
         raise OAuthError("unknown purpose")
@@ -157,7 +179,7 @@ def begin(conn, purpose="signin", return_to="/"):
 
     scopes = SIGNIN_SCOPES if purpose == "signin" else SIGNIN_SCOPES + CONNECT_SCOPES
     params = {
-        "client_id": client_id(),
+        "client_id": client_id(conn),
         "redirect_uri": redirect_uri(),
         "response_type": "code",
         "scope": " ".join(scopes),
@@ -188,12 +210,12 @@ def take_pending(conn, state):
     return row
 
 
-def exchange(code, verifier):
+def exchange(code, verifier, conn=None):
     """Swap the authorisation code for tokens."""
     data = _post_form(TOKEN_URL, {
         "code": code,
-        "client_id": client_id(),
-        "client_secret": client_secret(),
+        "client_id": client_id(conn),
+        "client_secret": client_secret(conn),
         "redirect_uri": redirect_uri(),
         "grant_type": "authorization_code",
         "code_verifier": verifier,
@@ -211,11 +233,11 @@ def identity(access_token):
     return info
 
 
-def refresh(refresh_token):
+def refresh(refresh_token, conn=None):
     return _post_form(TOKEN_URL, {
         "refresh_token": refresh_token,
-        "client_id": client_id(),
-        "client_secret": client_secret(),
+        "client_id": client_id(conn),
+        "client_secret": client_secret(conn),
         "grant_type": "refresh_token",
     })
 

@@ -273,6 +273,8 @@ a:hover { text-decoration: underline; }
 
 /* ── Responsive ─────────────────────────────────────────────────────────── */
 @media (max-width: 720px) {
+  .widgets { grid-template-columns: 1fr; grid-auto-rows: auto; }
+  .app > .canvas.home { display: block; }
   .canvas { padding: var(--s3); }
   .topbar { padding: var(--s2) var(--s3); flex-wrap: wrap; }
   .tabs { margin-left: 0; width: 100%; overflow-x: auto; }
@@ -527,8 +529,29 @@ a:hover { text-decoration: underline; }
 }
 
 /* ── Home widgets ───────────────────────────────────────────────────────── */
-.widgets { align-items: start; }
-.widget .node-body { display: flex; flex-direction: column; gap: var(--s3); }
+/* The front page fills the screen rather than sitting as three cards in the
+ * top-left with dead space beneath. On a small panel that dead space is most
+ * of the display, and a dashboard you have to lean towards is not one you
+ * will glance at. */
+.app > .canvas.home {
+  flex: 1;
+  display: flex;
+  padding: var(--gutter);
+  max-width: none;          /* fill the display, not a reading column */
+}
+.widgets {
+  flex: 1;
+  display: grid;
+  gap: var(--s4);
+  align-items: stretch;     /* equal height, not ragged */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+}
+.widget { display: flex; flex-direction: column; min-height: 0; }
+.widget .node-body {
+  display: flex; flex-direction: column; gap: var(--s3);
+  flex: 1; min-height: 0; overflow: auto;
+}
 .wstat { display: flex; flex-direction: column; gap: var(--s1); }
 .wline { display: flex; justify-content: space-between; gap: var(--s3); }
 .wlist { display: flex; flex-direction: column; }
@@ -544,7 +567,21 @@ a:hover { text-decoration: underline; }
 }
 .wtime { font-family: var(--mono); color: var(--text-3); flex: none; }
 .ok-line { color: var(--text-3); }
-.widget .empty { padding: var(--s5) var(--s2); }
+.widget .empty { padding: var(--s5) var(--s2); margin: auto 0; }
+
+/* Short displays give the widgets less room, so the chrome takes less of it.
+ * Keyed on height, not width: a wide-but-short panel has the same problem. */
+@media (max-height: 820px) {
+  .widget .node-head { padding-top: var(--s2); padding-bottom: var(--s2); }
+  .wrow { padding: var(--s2) 0; }
+  .widget .empty { padding: var(--s4) var(--s2); }
+}
+
+/* Two across when three columns would each be too narrow to read. */
+@media (min-width: 721px) and (max-width: 1000px) {
+  .widgets { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .widgets > :last-child { grid-column: 1 / -1; }
+}
 
 /* ── Settings ───────────────────────────────────────────────────────────── */
 .setgroup { margin-top: var(--s5); }
@@ -568,6 +605,8 @@ a:hover { text-decoration: underline; }
 .setrow.acct { align-items: start; }
 .hint.err { color: var(--danger); }
 .pad { padding: var(--s3) 0; }
+.checkout { margin-top: var(--s3); display: flex;
+            flex-direction: column; gap: var(--s2); }
 
 @media (max-width: 720px) {
   .setrow { grid-template-columns: 1fr; gap: var(--s2); }

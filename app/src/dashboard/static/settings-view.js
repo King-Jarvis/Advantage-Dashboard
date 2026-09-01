@@ -95,12 +95,47 @@ function accountsSection(refresh) {
           refresh();
         } }))));
 
-  const connect = g.configured
-    ? el("a", { class: "btn primary", href: "/api/google/connect",
-                text: "Connect a Google account" })
-    : el("div", { class: "hint",
-        text: "Set the Google client ID and secret below, then restart, "
-            + "to enable connecting accounts." });
+  // A live check rather than an instruction to restart. Credentials are read
+  // per request, so this reports the state the next sign-in will actually
+  // see -- which is the confirmation a form should give you.
+  const checkOut = el("div", { class: "checkout" });
+  const check = el("button", {
+    class: "btn", type: "button", text: "Check connection",
+    onclick: async () => {
+      mount(checkOut, el("span", { class: "hint", text: "Checking…" }));
+      try {
+        const r = await get("/api/google/check");
+        mount(checkOut,
+          el("div", { class: "row wrap" },
+            el("span", { class: `pill ${r.configured ? "ok" : "warn"}`,
+              text: r.configured ? "ready" : "not configured yet" }),
+            el("span", { class: "hint",
+              text: r.has_client_id ? `client ${r.client_id_hint}`
+                                    : "no client ID" }),
+            el("span", { class: "hint",
+              text: r.has_client_secret ? "secret set" : "no secret" })),
+          el("div", { class: "hint",
+            text: `Redirect URI to register with Google: ${r.redirect_uri}` }),
+          r.configured
+            ? el("div", { class: "pad" },
+                el("a", { class: "btn primary", href: "/api/google/connect",
+                          text: "Connect a Google account" }))
+            : null);
+      } catch (err) {
+        mount(checkOut, el("div", { class: "error",
+          text: err.message || "Could not check." }));
+      }
+    } });
+
+  const connect = el("div", {},
+    el("div", { class: "row wrap" },
+      g.configured
+        ? el("a", { class: "btn primary", href: "/api/google/connect",
+                    text: "Connect a Google account" })
+        : el("span", { class: "hint",
+            text: "Enter the client ID and secret below, then check." }),
+      check),
+    checkOut);
 
   return el("div", { class: "setgroup" },
     el("div", { class: "setgroup-head" },
