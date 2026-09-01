@@ -568,3 +568,75 @@ def test_category_changes_need_csrf(live):
                         {"name": "X", "group_id": grp["id"]},
                         headers={"Cookie": cookie})
     assert status == 403
+
+
+# ── settings ──────────────────────────────────────────────────────────────
+def test_settings_are_closed_to_anonymous_callers(live):
+    for method, path, payload in (("GET", "/api/settings", None),
+                                  ("PATCH", "/api/settings", {"timezone": "UTC"}),
+                                  ("GET", "/api/google/accounts", None)):
+        status, _, _ = call(live, method, path, payload)
+        assert status == 401, path
+
+
+def test_settings_round_trip(live):
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    status, _, body = call(live, "GET", "/api/settings",
+                           headers={"Cookie": cookie})
+    assert status == 200
+    keys = {s["key"] for s in body["settings"]}
+    assert "enable_llm_categories" in keys and "classify_model" in keys
+
+    status, _, _ = call(live, "PATCH", "/api/settings",
+                        {"timezone": "Europe/London",
+                         "baseline_window_months": 18}, headers=h)
+    assert status == 200
+    _, _, after = call(live, "GET", "/api/settings", headers={"Cookie": cookie})
+    got = {s["key"]: s.get("value") for s in after["settings"]}
+    assert got["timezone"] == "Europe/London"
+    assert got["baseline_window_months"] == 18
+
+
+def test_unknown_settings_are_refused(live):
+    cookie, csrf = login(live)
+    status, _, _ = call(live, "PATCH", "/api/settings", {"rm_rf": "yes"},
+                        headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+    assert status == 400
+
+
+def test_settings_changes_need_csrf(live):
+    cookie, _ = login(live)
+    status, _, _ = call(live, "PATCH", "/api/settings", {"timezone": "UTC"},
+                        headers={"Cookie": cookie})
+    assert status == 403
+
+
+def test_a_stored_secret_is_never_sent_to_the_browser(
+        live, tmp_path, monkeypatch):
+    from dashboard import crypt
+    key = tmp_path / "k"
+    key.write_text("a-long-random-secret-for-this-test-only")
+    monkeypatch.setenv("TOKEN_KEY_PATH", str(key))
+    crypt.reset_for_tests()
+
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    status, _, _ = call(live, "PATCH", "/api/settings",
+                        {"anthropic_api_key": "sk-ant-secret-value"}, headers=h)
+    assert status == 200
+
+    _, _, body = call(live, "GET", "/api/settings", headers={"Cookie": cookie})
+    blob = json.dumps(body)
+    # Not even an authenticated session can read a credential back out.
+    assert "sk-ant-secret-value" not in blob
+    item = next(s for s in body["settings"] if s["key"] == "anthropic_api_key")
+    assert item["value"] is None and item["is_set"] is True
+    crypt.reset_for_tests()
+
+
+def test_disconnecting_an_unknown_google_account_is_404(live):
+    cookie, csrf = login(live)
+    status, _, _ = call(live, "DELETE", "/api/google/accounts/" + "a" * 32,
+                        headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+    assert status == 404

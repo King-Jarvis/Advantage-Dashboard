@@ -1,0 +1,10 @@
+# The single runtime dependency.
+#
+# Python's standard library has no symmetric cipher, so OAuth refresh tokens
+# and API keys entered through the settings page cannot be encrypted at rest
+# without one. Storing bearer tokens to your mail and calendar in plaintext
+# would be the worse trade.
+#
+# Pinned exactly. Run pip-compile or add --require-hashes for a deployment
+# that needs supply-chain guarantees beyond a version pin.
+cryptography==50.0.1

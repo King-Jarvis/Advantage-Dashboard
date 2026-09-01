@@ -525,3 +525,51 @@ a:hover { text-decoration: underline; }
   .meterwrap { grid-column: 1 / -1; }
   .catrow .actions { grid-column: 1 / -1; justify-content: flex-start; }
 }
+
+/* ── Home widgets ───────────────────────────────────────────────────────── */
+.widgets { align-items: start; }
+.widget .node-body { display: flex; flex-direction: column; gap: var(--s3); }
+.wstat { display: flex; flex-direction: column; gap: var(--s1); }
+.wline { display: flex; justify-content: space-between; gap: var(--s3); }
+.wlist { display: flex; flex-direction: column; }
+.wrow {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: var(--s2) 0; border-bottom: 1px solid var(--line);
+  min-width: 0;
+}
+.wrow:last-child { border-bottom: 0; }
+.wrow .grow { flex: 1; min-width: 0; }
+.wrow .grow > *, .wsubject {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.wtime { font-family: var(--mono); color: var(--text-3); flex: none; }
+.ok-line { color: var(--text-3); }
+.widget .empty { padding: var(--s5) var(--s2); }
+
+/* ── Settings ───────────────────────────────────────────────────────────── */
+.setgroup { margin-top: var(--s5); }
+.setgroup:first-of-type { margin-top: var(--s3); }
+.setgroup-head {
+  display: flex; align-items: center; gap: var(--s2);
+  padding-bottom: var(--s2); border-bottom: 1px solid var(--line);
+  margin-bottom: var(--s2);
+}
+.setrow {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 340px);
+  gap: var(--s4); align-items: center;
+  padding: var(--s3) 0; border-bottom: 1px solid var(--line);
+}
+.setrow:last-child { border-bottom: 0; }
+.setlabel { display: flex; flex-direction: column; gap: 2px; cursor: pointer; }
+.setname { color: var(--text); }
+.setcontrol { display: flex; justify-content: flex-end; gap: var(--s2); }
+.secretrow { width: 100%; }
+.secretrow .input { flex: 1; min-width: 0; }
+.setrow.acct { align-items: start; }
+.hint.err { color: var(--danger); }
+.pad { padding: var(--s3) 0; }
+
+@media (max-width: 720px) {
+  .setrow { grid-template-columns: 1fr; gap: var(--s2); }
+  .setcontrol { justify-content: flex-start; }
+}

@@ -17,7 +17,7 @@ import urllib.parse
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import auth, auth_google, security, statements, stats, storage
+from . import auth, auth_google, crypt, security, settings, statements, stats, storage
 
 PACKAGE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(PACKAGE, "static")
@@ -41,10 +41,21 @@ ROUTES = [
     ("config",   {"GET"},         re.compile(r"^/api/config$"),            "none"),
     ("g_start",  {"GET"},         re.compile(r"^/api/auth/google/start$"),    "none"),
     ("g_cb",     {"GET"},         re.compile(r"^/api/auth/google/callback$"), "none"),
+    ("g_connect", {"GET"},
+     re.compile(r"^/api/google/connect$"), "session"),
+    ("g_accts",  {"GET"},
+     re.compile(r"^/api/google/accounts$"), "session"),
+    ("g_acct",   {"DELETE"},
+     re.compile(r"^/api/google/accounts/([0-9a-f]{32})$"), "session"),
+    ("settings", {"GET", "PATCH"},
+     re.compile(r"^/api/settings$"), "session"),
+    ("setting",  {"DELETE"},
+     re.compile(r"^/api/settings/([a-z_]{3,40})$"), "session"),
     ("accounts", {"GET", "POST"}, re.compile(r"^/api/accounts$"),          "session"),
     ("budget",   {"GET"},         re.compile(r"^/api/view/budget$"),       "session"),
     ("suggest",  {"GET"},         re.compile(r"^/api/view/suggestions$"),  "session"),
     ("overview", {"GET"},         re.compile(r"^/api/view/overview$"),     "session"),
+    ("home",     {"GET"},         re.compile(r"^/api/view/home$"),         "session"),
     ("history",  {"GET"},         re.compile(r"^/api/view/history$"),      "session"),
     ("coverage", {"GET"},         re.compile(r"^/api/view/coverage$"),     "session"),
     ("txns",     {"GET"},         re.compile(r"^/api/view/transactions$"),  "session"),
@@ -267,6 +278,26 @@ class Handler(BaseHTTPRequestHandler):
             return self._redirect("/?auth=failed")
 
         sub = info["sub"]
+
+        if pending["purpose"] == "connect":
+            # Connecting grants access to this account's mail and calendar.
+            # It is a different permission from signing in, and is only
+            # offered to an already-authenticated session -- begin() refuses
+            # otherwise -- so no additional allow-list check applies here.
+            try:
+                settings.save_google_account(
+                    conn, sub=sub, email=info.get("email", ""),
+                    refresh_token=tokens.get("refresh_token", ""),
+                    access_token=tokens.get("access_token", ""),
+                    expires_at=tokens.get("expires_at"),
+                    scopes=tokens.get("scope", ""))
+            except RuntimeError:
+                # No encryption key: refuse rather than store a refresh token
+                # in the clear.
+                storage.log("google connect refused: no encryption key")
+                return self._redirect("/#/settings?connect=nokey")
+            return self._redirect("/#/settings?connect=ok")
+
         allowed = auth_google.allowed_subs()
         if sub not in allowed:
             # Logged so the operator can copy the id into ALLOWED_GOOGLE_SUBS.
@@ -369,6 +400,61 @@ class Handler(BaseHTTPRequestHandler):
                 "activity_cents": ledger.category_activity(conn, c["id"], month),
                 "balance_cents": ledger.category_balance(conn, c["id"], month),
             } for c in cats]})
+
+    def api_home(self, conn, session):
+        """One summary per section, for the front page.
+
+        Each section reports its own state, including having no data and why.
+        A widget that renders nothing is indistinguishable from one that is
+        broken, so each says which it is.
+        """
+        from . import ledger
+        month = stats.this_month()
+        accounts = settings.list_google_accounts(conn)
+        connected = bool(accounts)
+
+        # ── budget ────────────────────────────────────────────────────────
+        cats = conn.execute(
+            "SELECT id, name FROM categories WHERE is_income=0 AND hidden=0"
+        ).fetchall()
+        spent = budgeted = 0
+        over = []
+        for c in cats:
+            b = ledger.get_budget(conn, month, c["id"])
+            a = max(0, -ledger.category_activity(conn, c["id"], month))
+            budgeted += b
+            spent += a
+            bal = ledger.category_balance(conn, c["id"], month)
+            if bal < 0:
+                over.append({"name": c["name"], "over_cents": -bal})
+        over.sort(key=lambda x: -x["over_cents"])
+
+        budget = {
+            "month": month,
+            "to_be_budgeted_cents": ledger.to_be_budgeted(conn, month),
+            "budgeted_cents": budgeted,
+            "spent_cents": spent,
+            "categories": len(cats),
+            "overspent": over[:3],
+            "overspent_count": len(over),
+            "has_data": bool(cats),
+        }
+
+        # ── calendar and mail ─────────────────────────────────────────────
+        # Both wait on a connected account. Reporting that plainly beats an
+        # empty list, which reads as "nothing today" rather than "not set up".
+        calendar = {"connected": connected, "events": [], "count": 0,
+                    "reason": "" if connected else "no Google account connected"}
+        mail = {"connected": connected, "messages": [], "count": 0,
+                "reason": "" if connected else "no Google account connected"}
+
+        self.json_out({
+            "month": month,
+            "google": {"configured": auth_google.configured(),
+                       "connected": connected,
+                       "accounts": len(accounts)},
+            "budget": budget, "calendar": calendar, "mail": mail,
+        })
 
     def api_overview(self, conn, session):
         """Everything the main screen draws, in one request.
@@ -510,6 +596,55 @@ class Handler(BaseHTTPRequestHandler):
             " ORDER BY t.date DESC, t.rowid DESC LIMIT ?",
             [*args, limit]).fetchall()
         self.json_out({"transactions": [dict(r) for r in rows]})
+
+    def api_g_connect(self, conn, session):
+        """Begin consent for an account whose mail and calendar we may read."""
+        if not auth_google.configured():
+            raise ValueError("Google is not configured on this deployment")
+        url = auth_google.begin(conn, purpose="connect", return_to="/#/settings")
+        self._redirect(url)
+
+    def api_g_accts(self, conn, session):
+        self.json_out({"accounts": settings.list_google_accounts(conn),
+                       "configured": auth_google.configured()})
+
+    def api_g_acct(self, conn, session, account_id):
+        n = settings.disconnect_google(conn, account_id)
+        if not n:
+            return self.fail(404, "no such account")
+        self.json_out({"disconnected": True})
+
+    def api_settings(self, conn, session):
+        if self.command == "GET":
+            return self.json_out({
+                "settings": settings.all_for_display(conn),
+                "secrets_available": crypt.available(),
+                "google": {
+                    "configured": auth_google.configured(),
+                    "accounts": settings.list_google_accounts(conn),
+                },
+            })
+
+        data = self.body_json()
+        if not isinstance(data, dict) or not data:
+            raise ValueError("nothing to change")
+        unknown = [k for k in data if settings.kind_of(k) is None]
+        if unknown:
+            raise ValueError("unknown setting: %s" % ", ".join(sorted(unknown)))
+        try:
+            for key, value in data.items():
+                settings.set_(conn, key, value)
+        except RuntimeError as e:
+            # No encryption key configured; refusing beats storing in clear.
+            return self.fail(409, str(e))
+        self.json_out({"updated": sorted(data)})
+
+    def api_setting(self, conn, session, key):
+        try:
+            settings.clear(conn, key)
+        except KeyError:
+            return self.fail(404, "no such setting")
+        self.json_out({"cleared": key})
 
     def api_groups(self, conn, session):
         from . import ledger

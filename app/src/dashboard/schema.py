@@ -208,6 +208,35 @@ CREATE TABLE IF NOT EXISTS oauth_pending (
     expires_at    TEXT NOT NULL
 );
 
+-- ── Settings ─────────────────────────────────────────────────────────────
+-- Key/value rather than columns, so adding a setting is not a migration.
+-- `secret` marks a value stored encrypted; those are never returned to the
+-- browser, only ever reported as set or not set.
+CREATE TABLE IF NOT EXISTS settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL DEFAULT '',
+    secret     INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+);
+
+-- ── Connected Google accounts ────────────────────────────────────────────
+-- Separate from `users`: signing in proves who you are, connecting an
+-- account grants access to its mail and calendar, and those are different
+-- permissions that should be revocable independently.
+CREATE TABLE IF NOT EXISTS google_accounts (
+    id             TEXT PRIMARY KEY,
+    sub            TEXT NOT NULL UNIQUE,     -- Google's stable account id
+    email          TEXT NOT NULL,
+    label          TEXT NOT NULL DEFAULT '',
+    scopes         TEXT NOT NULL DEFAULT '',
+    refresh_token  TEXT NOT NULL DEFAULT '', -- encrypted at rest
+    access_token   TEXT NOT NULL DEFAULT '', -- encrypted; short-lived anyway
+    expires_at     TEXT,
+    connected_at   TEXT NOT NULL,
+    last_sync_at   TEXT,
+    last_error     TEXT NOT NULL DEFAULT ''
+);
+
 -- ── Audit ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS audit_log (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -9,17 +9,21 @@ import { el, mount } from "./dom.js";
 import { loginView } from "./login.js";
 import { budgetView } from "./budget-view.js";
 import { overviewView } from "./overview-view.js";
+import { homeView } from "./home-view.js";
+import { settingsView } from "./settings-view.js";
 
 const root = document.getElementById("root");
 
 const VIEWS = [
+  { id: "home",   label: "Home",   kind: "system" },
   { id: "agenda", label: "Agenda", kind: "agenda" },
   { id: "inbox",  label: "Inbox",  kind: "inbox" },
   { id: "budget", label: "Budget", kind: "budget" },
+  { id: "settings", label: "Settings", kind: "system" },
 ];
 
 const state = {
-  user: null, view: "budget", month: thisMonth(),
+  user: null, view: "home", month: thisMonth(),
   // The budget tab has two screens: the chart you read, and the list you
   // edit. Kept apart because reading and editing want different layouts.
   editing: false, focusCategory: null,
@@ -124,7 +128,32 @@ async function render() {
   const body = el("main", { class: "canvas" });
   mount(root, topbar(), body);
 
-  if (state.view === "budget") {
+  if (state.view === "home") {
+    try {
+      await homeView(body, {
+        onGo: (v) => go({ view: v, editing: false }),
+        onSettings: () => go({ view: "settings" }),
+      });
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        state.user = null;
+        await render();
+        return;
+      }
+      mount(body, placeholder("system", "Home", "Could not load the summary"));
+    }
+  } else if (state.view === "settings") {
+    try {
+      await settingsView(body, { onGo: (v) => go({ view: v }) });
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        state.user = null;
+        await render();
+        return;
+      }
+      mount(body, placeholder("system", "Settings", "Could not load settings"));
+    }
+  } else if (state.view === "budget") {
     try {
       const onMonth = (m) => go({ month: m });
       if (state.editing) {
