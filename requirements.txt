@@ -1,0 +1,14 @@
+# The entire runtime dependency list.
+#
+# Everything else in this application is the Python standard library, which is
+# a deliberate constraint: a dashboard holding mail, calendar and finances has
+# a smaller attack surface when there is almost nothing in it that someone
+# else wrote. One dependency is one supply chain to trust.
+#
+# This one earns its place. Fernet gives authenticated symmetric encryption
+# for the OAuth refresh tokens at rest, and hand-rolling that is exactly the
+# sort of cleverness that ends up in an incident report.
+#
+# Pinned rather than floating: an install run six months from now should get
+# the version this was tested against, not whatever shipped last week.
+cryptography==50.0.1

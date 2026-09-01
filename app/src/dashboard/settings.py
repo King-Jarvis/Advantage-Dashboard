@@ -38,6 +38,9 @@ SPEC = {
     "anthropic_api_key": ("secret", "", "Enables the model-backed features"),
     "google_client_id":  ("text", "", "From your Google Cloud project"),
     "google_client_secret": ("secret", "", "From your Google Cloud project"),
+    # Held here rather than in the environment so the whole setup can be done
+    # in the browser. It is a secret like any other: written, never returned.
+    "ingest_key": ("secret", "", "Shared with n8n so it can trigger a sync"),
 }
 
 SECRET_KINDS = {"secret"}
@@ -60,6 +63,7 @@ LABELS = {
     "anthropic_api_key": "Anthropic API key",
     "google_client_id": "Google client ID",
     "google_client_secret": "Google client secret",
+    "ingest_key": "n8n ingest key",
 }
 
 

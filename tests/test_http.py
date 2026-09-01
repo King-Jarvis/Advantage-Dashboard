@@ -246,7 +246,10 @@ def test_config_never_leaks_the_client_id(live, monkeypatch):
     monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid.apps.googleusercontent.com")
     monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "shh")
     _, _, body = call(live, "GET", "/api/config")
-    assert body == {"google_enabled": True}, "config should say only whether, not what"
+    # Still exact: this endpoint is unauthenticated, so every field on it is
+    # a deliberate decision. needs_setup is install state, not a credential.
+    assert body == {"google_enabled": True, "needs_setup": False}, \
+        "config should say only whether, not what"
 
 
 def test_google_start_is_unavailable_when_unconfigured(live, monkeypatch):
@@ -1031,4 +1034,116 @@ def test_sync_reports_a_partial_failure_as_200_with_detail(live, tmp_path,
     assert "FAKE-REFRESH" not in str(body)
 
     del os.environ["INGEST_KEY"]
+    crypt.reset_for_tests()
+
+
+# ── first run, over HTTP ──────────────────────────────────────────────────
+@pytest.fixture
+def fresh(tmp_path):
+    """A server with no users at all -- an install nobody has claimed."""
+    storage.configure(str(tmp_path / "fresh-data"))
+    conn = storage.connect()
+    schema.migrate(conn)
+    conn.close()
+    httpd, port = server.bind("127.0.0.1", 0)
+    t = threading.Thread(target=httpd.serve_forever, daemon=True)
+    t.start()
+    yield port
+    httpd.shutdown()
+    httpd.server_close()
+    from dashboard import firstrun
+    firstrun.clear_token()
+
+
+def test_a_fresh_install_advertises_setup(fresh):
+    _, _, cfg = call(fresh, "GET", "/api/config")
+    assert cfg["needs_setup"] is True
+
+
+def test_a_claimed_install_does_not_advertise_setup(live):
+    # Separate tests on purpose: both fixtures configure the one global
+    # storage root, so a test holding both would have them fight over it.
+    _, _, cfg = call(live, "GET", "/api/config")
+    assert cfg["needs_setup"] is False
+
+
+def test_config_never_leaks_the_setup_token(fresh):
+    """The code is proof you can read a file on the box. Serving it over HTTP
+    to anyone who asks would defeat the entire point."""
+    from dashboard import firstrun
+    from dashboard import storage as st
+    conn = st.connect()
+    token = firstrun.ensure_token(conn)
+    conn.close()
+    _, _, cfg = call(fresh, "GET", "/api/config")
+    assert token not in json.dumps(cfg)
+    status, _, body = call(fresh, "GET", "/api/setup/claim")
+    assert status in (404, 405), "the claim route answered a GET"
+
+
+def test_claiming_over_http_signs_you_in(fresh):
+    from dashboard import firstrun
+    from dashboard import storage as st
+    conn = st.connect()
+    token = firstrun.ensure_token(conn)
+    conn.close()
+
+    status, headers, body = call(fresh, "POST", "/api/setup/claim", {
+        "token": token, "username": "king", "password": "a-long-enough-pass"})
+    assert status == 200, body
+    assert body["csrf_token"]
+    cookie = headers["Set-Cookie"].split(";")[0]
+
+    # The session works immediately -- no second sign-in.
+    status, _, who = call(fresh, "GET", "/api/auth/whoami", headers={"Cookie": cookie})
+    assert status == 200 and who["username"] == "king"
+
+    _, _, cfg = call(fresh, "GET", "/api/config")
+    assert cfg["needs_setup"] is False
+
+
+def test_a_wrong_code_over_http_creates_nothing(fresh):
+    from dashboard import firstrun
+    from dashboard import storage as st
+    conn = st.connect()
+    firstrun.ensure_token(conn)
+    conn.close()
+    status, _, body = call(fresh, "POST", "/api/setup/claim", {
+        "token": "wrong", "username": "intruder", "password": "a-long-pass-x"})
+    assert status == 400
+    _, _, cfg = call(fresh, "GET", "/api/config")
+    assert cfg["needs_setup"] is True, "a bad code claimed the install"
+
+
+def test_claim_is_refused_once_a_user_exists(live):
+    """The route stays mounted, so it has to refuse on its own."""
+    status, _, body = call(live, "POST", "/api/setup/claim", {
+        "token": "anything", "username": "intruder", "password": "a-long-pass"})
+    assert status == 400
+    assert "already been set up" in str(body)
+
+
+def test_the_ingest_key_can_be_set_in_settings(live, tmp_path, monkeypatch):
+    """The whole setup is meant to be doable in a browser, so the key n8n uses
+    has to be settable there rather than only in the environment."""
+    import os
+
+    from dashboard import crypt, settings
+    from dashboard import storage as st
+    k = tmp_path / "ik"
+    k.write_text("a-long-random-secret-for-this-test-only")
+    monkeypatch.setenv("TOKEN_KEY_PATH", str(k))
+    crypt.reset_for_tests()
+    os.environ.pop("INGEST_KEY", None)
+
+    conn = st.connect()
+    settings.set_(conn, "ingest_key", "key-from-the-settings-page")
+    conn.close()
+
+    status, _, _ = call(live, "POST", "/api/sync/google", {},
+                        headers={"X-Ingest-Key": "key-from-the-settings-page"})
+    assert status == 200, "a key set in Settings was not accepted"
+    status, _, _ = call(live, "POST", "/api/sync/google", {},
+                        headers={"X-Ingest-Key": "the-wrong-key"})
+    assert status == 401
     crypt.reset_for_tests()

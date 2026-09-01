@@ -5,7 +5,7 @@ import os
 import ssl
 import sys
 
-from . import auth, schema, server, storage
+from . import auth, firstrun, schema, server, storage
 
 
 def main(argv=None):
@@ -24,6 +24,10 @@ def main(argv=None):
                         "HSTS is sent. Use --cert/--key to serve TLS directly.")
     p.add_argument("--cert", help="PEM certificate; serve HTTPS directly")
     p.add_argument("--key", help="PEM private key for --cert")
+    p.add_argument("--setup-code", action="store_true",
+                   help="print the code that claims an unclaimed install, "
+                        "creating it if needed, and exit. Prints nothing and "
+                        "exits 1 if an account already exists.")
     p.add_argument("--create-user", metavar="USERNAME",
                    help="create a user and exit; the password is read from "
                         "stdin so it never appears in the process list")
@@ -33,6 +37,17 @@ def main(argv=None):
     conn = storage.get_conn()
     schema.migrate(conn)
 
+    if args.setup_code:
+        # The installer asks for this rather than watching for the token file:
+        # a file that has not appeared yet and a file that will never appear
+        # look identical, and guessing between them told people their fresh
+        # install already had an account.
+        token = firstrun.ensure_token(conn)
+        if not token:
+            return 1
+        print(token)
+        return 0
+
     if args.create_user:
         password = sys.stdin.readline().rstrip("\n")
         if not password:
@@ -41,9 +56,6 @@ def main(argv=None):
         print("created user %s" % args.create_user)
         return 0
 
-    if not conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]:
-        print("No users yet. Create one:\n"
-              "    echo -n 'your-password' | python -m dashboard --create-user you")
 
     if bool(args.cert) != bool(args.key):
         p.error("--cert and --key must be given together")
@@ -74,6 +86,18 @@ def main(argv=None):
                 % (scheme, args.host, port, os.getpid()))
     print("Dashboard  ->  %s://%s:%d/" % (scheme, args.host, port))
     print("data: %s" % root)
+
+    # The claim code, if this install has not been set up. Printed every start
+    # until it is claimed, because the one time it matters is the one time you
+    # are looking at this output -- and it is unrecoverable from the UI by
+    # design, since anyone who could read it there would not need it.
+    token = firstrun.ensure_token(conn)
+    if token:
+        host = "localhost" if args.host in ("0.0.0.0", "::") else args.host
+        print("\n  Not set up yet. Open the dashboard and enter this code:\n"
+              "\n      %s\n"
+              "\n  It creates the first account, then stops working.\n"
+              "  Open  %s://%s:%d/\n" % (token, scheme, host, port))
     if args.host not in ("127.0.0.1", "localhost") and not secure:
         print("\n  ! Bound to %s without --tls. This app uses Web Crypto, which\n"
               "    browsers disable outside a secure context, so it will fail\n"

@@ -49,4 +49,22 @@ else
   exit 0
 fi
 
-echo "clean — $count modules parse"
+# Every relative import must resolve to a file that exists. A module that
+# parses fine but 404s at runtime takes the whole page down with it, and the
+# only symptom is a blank screen -- which reads as a styling problem and is
+# not one.
+missing=""
+for f in "$TARGET"/*.js; do
+  imports=$(grep -o 'from "\./[A-Za-z0-9._-]*"' "$f" 2>/dev/null | sed 's|from "\./||; s|"||' || true)
+  for m in $imports; do
+    if [ ! -f "$TARGET/$m" ]; then
+      missing="$missing\n  BLOCKED -- $(basename "$f") imports missing ./$m"
+    fi
+  done
+done
+if [ -n "$missing" ]; then
+  printf '%b\n' "$missing" >&2
+  exit 1
+fi
+
+echo "clean — $count modules parse, every import resolves"

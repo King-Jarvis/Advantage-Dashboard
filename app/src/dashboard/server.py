@@ -22,6 +22,7 @@ from . import (
     auth_google,
     crypt,
     feeds,
+    firstrun,
     security,
     settings,
     statements,
@@ -50,6 +51,9 @@ ROUTES = [
     ("whoami",   {"GET"},         re.compile(r"^/api/auth/whoami$"),       "session"),
     ("health",   {"GET"},         re.compile(r"^/api/health$"),            "none"),
     ("config",   {"GET"},         re.compile(r"^/api/config$"),            "none"),
+    # Claiming a fresh install is unauthenticated by necessity -- there is
+    # nobody to authenticate as yet. The setup token is what stands in.
+    ("claim",    {"POST"},        re.compile(r"^/api/setup/claim$"),       "none"),
     ("g_start",  {"GET"},         re.compile(r"^/api/auth/google/start$"),    "none"),
     ("g_cb",     {"GET"},         re.compile(r"^/api/auth/google/callback$"), "none"),
     ("g_check",  {"GET"},
@@ -197,7 +201,11 @@ class Handler(BaseHTTPRequestHandler):
 
         if need == "ingest":
             supplied = self.headers.get("X-Ingest-Key")
-            expected = os.environ.get("INGEST_KEY", "")
+            # Settings first so the key can be set in the browser; the
+            # environment still wins nothing but still works, for a container
+            # that would rather inject it.
+            expected = settings.get(conn, "ingest_key") or \
+                os.environ.get("INGEST_KEY", "")
             # An ingest key must never open a browser route, and a session
             # must never open an ingest route: compromising one grants
             # nothing of the other.
@@ -272,7 +280,23 @@ class Handler(BaseHTTPRequestHandler):
         Deliberately says only whether Google sign-in is *available* -- never
         the client id, and never anything about which accounts exist.
         """
-        self.json_out({"google_enabled": auth_google.configured(conn)})
+        self.json_out({"google_enabled": auth_google.configured(conn),
+                       "needs_setup": firstrun.needs_setup(conn)})
+
+    def api_claim(self, conn, session):
+        data = self.body_json()
+        try:
+            sid, csrf = firstrun.claim(
+                conn, data.get("token"), data.get("username"),
+                data.get("password"), ip=self.client_address[0],
+                user_agent=self.headers.get("User-Agent", ""))
+        except firstrun.SetupError as e:
+            return self.fail(400, str(e))
+        self.json_out(
+            {"ok": True, "csrf_token": csrf},
+            extra={"Set-Cookie": security.cookie(
+                SESSION_COOKIE, sid, secure=self.secure,
+                max_age=auth.SESSION_ABSOLUTE_DAYS * 86400)})
 
     def _redirect(self, location, extra=None):
         headers = {"Location": location}

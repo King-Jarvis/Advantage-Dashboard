@@ -7,6 +7,7 @@
 import { ApiError, get, setCsrf } from "./api.js";
 import { el, mount } from "./dom.js";
 import { loginView } from "./login.js";
+import { setupView } from "./setup-view.js";
 import { budgetView } from "./budget-view.js";
 import { overviewView } from "./overview-view.js";
 import { homeView } from "./home-view.js";
@@ -121,11 +122,16 @@ async function go(patchState) {
 async function render() {
   if (!state.user) {
     let googleEnabled = false;
+    let needsSetup = false;
     try {
       const cfg = await get("/api/config");
       googleEnabled = Boolean(cfg.google_enabled);
+      needsSetup = Boolean(cfg.needs_setup);
     } catch { /* a config failure must not block the password form */ }
-    loginView(root, { googleEnabled, onSignedIn: boot });
+    // An install with no users has nothing to sign in to, so offering a
+    // password form could only ever fail.
+    if (needsSetup) setupView(root, { onSignedIn: boot });
+    else loginView(root, { googleEnabled, onSignedIn: boot });
     return;
   }
 
