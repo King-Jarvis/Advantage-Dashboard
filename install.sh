@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install the dashboard and start it.
 #
-#   curl -fsSL https://raw.githubusercontent.com/OWNER/REPO/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/King-Jarvis/Advantage-Dashboard/main/install.sh | bash
 #
 # Or, having already cloned:  ./install.sh
 #
@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-REPO="${DASHBOARD_REPO:-https://github.com/OWNER/REPO.git}"
+REPO="${DASHBOARD_REPO:-https://github.com/King-Jarvis/Advantage-Dashboard.git}"
 BRANCH="${DASHBOARD_BRANCH:-main}"
 APP_DIR="${DASHBOARD_HOME:-$HOME/.local/share/personal-dashboard}"
 DATA_DIR="${DASHBOARD_DATA:-$HOME/.dashboard}"
