@@ -13,6 +13,7 @@ urllib do not already do.
 """
 import datetime as _dt
 import json
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -257,19 +258,35 @@ def _split_from(value):
     return text, text.lower()
 
 
-def _baseline(labels, bulk=False, direct=False):
+MACHINE = re.compile(
+    r"no[-_.]?reply|do[-_.]?not[-_.]?reply|auto[-_.]?(confirm|reply)|"
+    r"notification|automated|mailer|bounce|postmaster|"
+    r"(order|shipment|delivery)[-_.]?(update|tracking|confirm)",
+    re.I)
+
+
+def _is_machine(address):
+    """Does the local part announce that nobody is reading replies?"""
+    return bool(MACHINE.search(str(address or "").split("@")[0]))
+
+
+def _baseline(labels, bulk=False, direct=False, machine=False):
     """A first-pass importance from signals that cost nothing to read.
 
     Deliberately dull and explainable. It exists so the inbox is useful before
     any model has run, and so there is always a reason to show -- a score with
     no reason can only be trusted blindly or ignored.
 
-    The two signals that matter most are not Gmail's own labels. Mail carrying
-    List-Unsubscribe is, by its own admission, bulk: no human typed it to you.
-    Mail addressed to you by name in To is the opposite. Without those, every
-    unread message scores alike and the ranking says nothing -- which is how
-    an inbox ends up showing twenty-six newsletters and one real message all
-    at the same weight.
+    Three signals, none of them Gmail's own labels, do most of the work:
+
+    List-Unsubscribe means the mail is bulk by its own admission. A name in To
+    means it was aimed at you rather than at a list. And a sender local part
+    like no-reply or shipment-tracking means nobody typed it -- which matters,
+    because an order confirmation is addressed to you personally and is still
+    not someone asking you for something.
+
+    Without the third, every Amazon dispatch note outranks a note from a
+    friend, which is precisely the ranking an inbox is supposed to fix.
     """
     labels = set(labels or [])
     promo = "CATEGORY_PROMOTIONS" in labels or "CATEGORY_SOCIAL" in labels
@@ -277,7 +294,7 @@ def _baseline(labels, bulk=False, direct=False):
 
     if "STARRED" in labels:
         return 5, "you starred it"
-    if "IMPORTANT" in labels and unread:
+    if "IMPORTANT" in labels and unread and not machine:
         return 4, "Gmail marked this important and it is unread"
     if "IMPORTANT" in labels:
         return 3, "Gmail marked this important"
@@ -289,7 +306,12 @@ def _baseline(labels, bulk=False, direct=False):
     if promo:
         return 2, "promotional or social mail"
 
-    # Nothing says bulk, so a person plausibly sent this.
+    # Addressed to you, but by a machine: worth seeing, not worth interrupting
+    # for. The top band is kept for mail a person actually wrote.
+    if machine:
+        return 3 if direct else 2, ("an automated notice addressed to you"
+                                    if direct else "an automated notice")
+
     if direct and unread:
         return 4, "addressed to you directly, and unread"
     if direct:
@@ -327,7 +349,8 @@ def fetch_messages(conn, account_id, query="-in:chats newer_than:14d",
         name, addr = _split_from(_header(headers, "From"))
         bulk = bool(_header(headers, "List-Unsubscribe"))
         direct = bool(mine) and mine in _header(headers, "To").lower()
-        score, reason = _baseline(labels, bulk=bulk, direct=direct)
+        score, reason = _baseline(labels, bulk=bulk, direct=direct,
+                                  machine=_is_machine(addr))
         received = ""
         if full.get("internalDate"):
             received = _dt.datetime.fromtimestamp(

@@ -440,3 +440,44 @@ def test_list_parameters_are_repeated_not_stringified(monkeypatch):
     assert "metadataHeaders=From" in seen["url"]
     assert "metadataHeaders=List-Unsubscribe" in seen["url"]
     assert "%5B" not in seen["url"], "a list was serialised as its repr"
+
+
+# ── machine mail vs a person ──────────────────────────────────────────────
+@pytest.mark.parametrize("addr", [
+    "no-reply@x.com", "noreply@x.com", "do_not_reply@x.com",
+    "auto-confirm@amazon.com", "shipment-tracking@amazon.com",
+    "order-update@amazon.com", "notification@x.com", "mailer-daemon@x.com",
+])
+def test_machine_addresses_are_recognised(addr):
+    assert google_api._is_machine(addr), addr
+
+
+@pytest.mark.parametrize("addr", [
+    "sam@example.com", "j.smith@work.co.uk", "contact@x.com",
+    "hello@x.com", "support@x.com",
+])
+def test_human_addresses_are_not(addr):
+    assert not google_api._is_machine(addr), addr
+
+
+def test_a_dispatch_note_does_not_outrank_a_friend():
+    """The ranking an inbox exists to fix. An order confirmation is addressed
+    to you personally and is still not someone asking you for something."""
+    robot = google_api._baseline(["UNREAD"], direct=True, machine=True)[0]
+    friend = google_api._baseline(["UNREAD"], direct=True, machine=False)[0]
+    assert robot < friend
+
+
+def test_a_machine_notice_is_still_visible():
+    """Lower than a person, but not buried with the promotions."""
+    score, reason = google_api._baseline(["UNREAD"], direct=True, machine=True)
+    assert score == 3 and "automated" in reason
+
+
+def test_gmails_important_label_does_not_promote_a_robot():
+    assert google_api._baseline(["IMPORTANT", "UNREAD"], machine=True)[0] == 3
+
+
+def test_starring_a_robot_still_wins():
+    """An explicit human signal outranks every inference."""
+    assert google_api._baseline(["STARRED"], machine=True)[0] == 5
