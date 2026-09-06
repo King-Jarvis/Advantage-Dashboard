@@ -118,10 +118,18 @@ CERT="$DATA_DIR/cert.pem"; CKEY="$DATA_DIR/key.pem"
 if [ ! -f "$CERT" ]; then
   # Browsers disable Web Crypto outside a secure context, so this does not
   # merely protect the traffic -- without it the page will not run at all.
+  # Name every address this machine actually answers on. A certificate that
+  # covers only the hostname produces a second, different browser warning
+  # when you reach it by IP -- and two warnings teach you to click through
+  # warnings, which is the habit that makes the certificate pointless.
+  SAN="DNS:$(hostname),DNS:localhost,IP:127.0.0.1"
+  for ip in $(hostname -I 2>/dev/null); do
+    case "$ip" in *:*) continue ;; esac      # IPv4 only
+    SAN="$SAN,IP:$ip"
+  done
   openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
     -keyout "$CKEY" -out "$CERT" -subj "/CN=$(hostname)" \
-    -addext "subjectAltName=DNS:$(hostname),DNS:localhost,IP:127.0.0.1" \
-    >/dev/null 2>&1
+    -addext "subjectAltName=$SAN" >/dev/null 2>&1
   chmod 600 "$CKEY"
   info "self-signed certificate created (your browser will warn once)"
 else
