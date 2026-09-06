@@ -238,3 +238,29 @@ def test_pending_count_reports_what_is_waiting(conn, acct):
     assert push.pending_count(conn) == 0
     feeds.set_message(conn, mid, archived=1)
     assert push.pending_count(conn) == 1
+
+
+def test_a_timed_event_carries_an_offset(conn, acct, calls):
+    """Google rejects a dateTime with neither offset nor timeZone, answering
+    400 'required' without naming the field. Storage is naive UTC, so Z."""
+    eid = an_event(conn, acct, uid="local:timed")
+    conn.execute("UPDATE events SET dirty=1 WHERE id=?", (eid,))
+    push.run(conn)
+    start = calls[0]["payload"]["start"]["dateTime"]
+    end = calls[0]["payload"]["end"]["dateTime"]
+    assert start.endswith("Z") and end.endswith("Z"), (start, end)
+
+
+def test_an_offset_is_not_doubled(conn, acct, calls):
+    eid = an_event(conn, acct, uid="local:already",
+                   starts_at="2026-09-10T09:00:00Z")
+    conn.execute("UPDATE events SET dirty=1 WHERE id=?", (eid,))
+    push.run(conn)
+    assert calls[0]["payload"]["start"]["dateTime"].count("Z") == 1
+
+
+def test_all_day_events_get_no_offset(conn, acct, calls):
+    eid = an_event(conn, acct, uid="local:day", all_day=1)
+    conn.execute("UPDATE events SET dirty=1 WHERE id=?", (eid,))
+    push.run(conn)
+    assert calls[0]["payload"]["start"] == {"date": "2026-09-10"}

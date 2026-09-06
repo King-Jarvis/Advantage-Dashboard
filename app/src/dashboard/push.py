@@ -83,9 +83,15 @@ def event_payload(row):
     passes through untouched.
     """
     key = "date" if row["all_day"] else "dateTime"
+
     def stamp(value):
         text = str(value or "")
-        return text[:10] if row["all_day"] else text
+        if row["all_day"]:
+            return text[:10]
+        # Google rejects a timed event whose dateTime carries neither an
+        # offset nor a timeZone -- it answers 400 "required" and names no
+        # field. Everything is stored as naive UTC, so the offset is Z.
+        return text if text.endswith("Z") or "+" in text[10:] else text + "Z"
     body = {
         "summary": row["title"] or "",
         "start": {key: stamp(row["starts_at"])},
