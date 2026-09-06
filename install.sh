@@ -27,12 +27,33 @@ PORT="${DASHBOARD_PORT:-8766}"
 # than a careless one.
 BIND="${DASHBOARD_BIND:-0.0.0.0}"
 
+# The service runs sandboxed: PrivateTmp gives it its own /tmp, and
+# ProtectSystem=strict makes everything outside $HOME read-only. A venv or a
+# database anywhere else is then invisible or unwritable to it, and systemd
+# reports that as 203/EXEC -- which says nothing about the actual cause.
+# Catching it here costs one comparison and saves a genuinely baffling hour.
+check_path() {
+  case "$2" in
+    /tmp/*|/var/tmp/*)
+      die "$1 is under /tmp ($2).
+  The service gets a private /tmp, so it would not be able to see this.
+  Choose a path under your home directory instead." ;;
+  esac
+  case "$2" in
+    "$HOME"/*) : ;;
+    *) printf '\n  ! %s is outside your home directory (%s).\n' "$1" "$2"
+       printf '    The service is sandboxed and may not be able to reach it.\n' ;;
+  esac
+}
+
 say()  { printf '\n\033[1m%s\033[0m\n' "$*"; }
 info() { printf '  %s\n' "$*"; }
 die()  { printf '\n\033[31merror:\033[0m %s\n\n' "$*" >&2; exit 1; }
 
 # ── prerequisites ────────────────────────────────────────────────────────
 say "Checking prerequisites"
+check_path "the install directory" "$APP_DIR"
+check_path "the data directory" "$DATA_DIR"
 
 PY=""
 for c in python3.13 python3.12 python3.11 python3; do
