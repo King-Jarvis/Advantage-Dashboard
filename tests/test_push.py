@@ -41,10 +41,16 @@ def calls(monkeypatch):
 
 
 def a_message(conn, acct, **kw):
-    feeds.upsert_messages(conn, acct, [dict(
-        source_uid=kw.pop("uid", "m1"), received_at="2026-09-01T09:00:00",
-        subject="Hello", **kw)])
-    return conn.execute("SELECT id FROM messages").fetchone()[0]
+    uid = kw.pop("uid", "m1")
+    base = dict(source_uid=uid, received_at="2026-09-01T09:00:00",
+                subject="Hello")
+    base.update(kw)
+    feeds.upsert_messages(conn, acct, [base])
+    # Select by uid, not "the first row" -- without the WHERE this returned
+    # whichever message was created first, so a second call silently handed
+    # back the first message's id and both edits landed on one row.
+    return conn.execute("SELECT id FROM messages WHERE source_uid=?",
+                        (uid,)).fetchone()[0]
 
 
 # ── label arithmetic ──────────────────────────────────────────────────────
