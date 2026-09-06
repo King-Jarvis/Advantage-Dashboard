@@ -9,7 +9,7 @@ One account failing must not stop the others. A household with a personal and
 a work account should not lose the personal calendar because the work one had
 its access revoked.
 """
-from . import feeds, google_api, settings
+from . import feeds, google_api, push, settings
 
 
 def _one(conn, account, days_ahead, mail_query):
@@ -43,6 +43,13 @@ def run(conn, account_id=None, days_ahead=21,
         return {"ok": False, "error": "no connected Google account",
                 "results": []}
 
+    # Push before pull, always. The other order means a poll overwrites the
+    # local copy of a row whose edit has not been sent yet -- and because a
+    # dirty row is skipped by the writer, the edit would then sit for ever
+    # against data that has already moved on. Pushing first lets the pull
+    # confirm what we just did instead of fighting it.
+    pushed = push.run(conn, account_id=account_id)
+
     results, failures = [], 0
     for account in accounts:
         try:
@@ -60,4 +67,6 @@ def run(conn, account_id=None, days_ahead=21,
     feeds.note_sync(conn, "google", status,
                     "" if status == "ok" else
                     "%d of %d accounts failed" % (failures, len(accounts)))
-    return {"ok": failures == 0, "results": results}
+    return {"ok": failures == 0, "results": results,
+            "pushed": pushed["results"], "push_ok": pushed["ok"],
+            "still_pending": push.pending_count(conn)}

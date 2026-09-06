@@ -499,9 +499,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def api_editmsg(self, conn, session, message_id):
         data = self.body_json()
+        # Taken from feeds so the two cannot drift: a field added there and
+        # forgotten here would be accepted by the model and silently dropped
+        # by the endpoint.
         fields = {k: v for k, v in data.items()
-                  if k in ("archived", "is_unread", "is_starred",
-                           "importance_override")}
+                  if k in (feeds.PUSHABLE | feeds.LOCAL_ONLY)}
         if not fields:
             raise ValueError("nothing to change")
         try:

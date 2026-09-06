@@ -184,9 +184,18 @@ def inbox(conn, min_importance=3, limit=50, include_archived=False):
     return [dict(r) for r in rows]
 
 
+# Fields Google knows about. Changing one of these means the provider's copy
+# is now behind, so the row is dirty until a push says otherwise.
+PUSHABLE = {"archived", "is_unread", "is_starred", "trashed", "is_spam"}
+# Fields that exist only here. An importance correction is ours alone; marking
+# it dirty would block the row from receiving fresh label state from Gmail
+# until a pointless round trip cleared the flag.
+LOCAL_ONLY = {"importance_override"}
+
+
 def set_message(conn, message_id, **fields):
     """Apply a local change, and mark it as not yet pushed."""
-    allowed = {"archived", "is_unread", "is_starred", "importance_override"}
+    allowed = PUSHABLE | LOCAL_ONLY
     bad = set(fields) - allowed
     if bad:
         raise ValueError("cannot set: " + ", ".join(sorted(bad)))
@@ -201,7 +210,9 @@ def set_message(conn, message_id, **fields):
         fields["importance_override"] = v
     values = [int(v) if isinstance(v, bool) else v for v in fields.values()]
     sets = ", ".join("%s=?" % k for k in fields)
-    conn.execute("UPDATE messages SET %s, dirty=1 WHERE id=?" % sets,
+    if fields.keys() & PUSHABLE:
+        sets += ", dirty=1, push_error=''"
+    conn.execute("UPDATE messages SET %s WHERE id=?" % sets,
                  [*values, message_id])
     conn.commit()
 

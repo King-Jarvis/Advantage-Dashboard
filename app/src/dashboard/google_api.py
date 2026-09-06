@@ -157,6 +157,59 @@ class _Unauthorized(Exception):
     pass
 
 
+class Conflict(Exception):
+    """Google's copy moved since we read it. The local edit is not lost --
+    it stays dirty and is reported, rather than being pushed over the top."""
+
+
+def _send(url, token, method="POST", payload=None, etag=None):
+    """A write. Same error handling as _get, including the 401 signal."""
+    data = json.dumps(payload).encode() if payload is not None else b""
+    headers = {"Authorization": "Bearer " + token,
+               "Accept": "application/json",
+               "Content-Type": "application/json"}
+    # An etag turns a blind overwrite into a conditional one: if Google's copy
+    # moved since we read it, this fails with 412 instead of quietly
+    # discarding whatever changed there.
+    if etag:
+        headers["If-Match"] = etag
+    req = urllib.request.Request(url, data=data, method=method,
+                                 headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
+            body = r.read()
+            return json.loads(body.decode()) if body.strip() else {}
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            raise _Unauthorized() from None
+        if e.code == 412:
+            raise Conflict() from None
+        reason = ""
+        try:
+            err = json.loads(e.read().decode()).get("error", {})
+            details = err.get("errors") or [{}]
+            reason = str(details[0].get("reason") or err.get("status") or "")[:60]
+        except Exception:
+            pass
+        raise GoogleError(_explain(reason, url, e.code)) from None
+    except (urllib.error.URLError, TimeoutError) as e:
+        raise GoogleError("could not reach Google: %s" % e.reason) from None
+
+
+def _send_retrying(conn, account_id, url, method="POST", payload=None,
+                   etag=None):
+    token = access_token(conn, account_id)
+    try:
+        return _send(url, token, method, payload, etag)
+    except _Unauthorized:
+        token = access_token(conn, account_id, force=True)
+    try:
+        return _send(url, token, method, payload, etag)
+    except _Unauthorized:
+        raise GoogleError("Google rejected the refreshed token -- "
+                          "the account may need reconnecting") from None
+
+
 def _get_retrying(conn, account_id, url, params=None):
     """One 401 is a stale token, not a failure. Two is a real problem."""
     token = access_token(conn, account_id)

@@ -920,13 +920,24 @@ def test_correcting_an_importance_survives_the_next_sync(live, tmp_path,
     call(live, "PATCH", f"/api/edit/message/{mid}", {"importance_override": 5},
          headers={"Cookie": cookie, "X-CSRF-Token": csrf})
 
-    # A later sync re-asserts the classifier's low score; the correction wins.
+    # A later sync re-asserts the classifier's low score and brings fresh
+    # state from the provider. The row is written -- an importance correction
+    # is ours alone, so it must not block Gmail's own changes from landing --
+    # and the correction survives because upsert never touches the override
+    # column, not because the row was skipped.
     _, _, again = call(live, "POST", "/api/ingest/messages", {
         "account": acct,
-        "messages": [{"source_uid": "m1", "subject": "Invoice",
-                      "received_at": "2026-09-01T09:00:00", "importance": 1}],
+        "messages": [{"source_uid": "m1", "subject": "Invoice paid",
+                      "received_at": "2026-09-01T09:00:00", "importance": 1,
+                      "is_unread": False}],
     }, headers=h_ing)
-    assert again["skipped_local_edits"] == 1
+    assert again["written"] == 1 and again["skipped_local_edits"] == 0
+
+    _, _, fresh = call(live, "GET", "/api/view/inbox?min_importance=0",
+                       headers={"Cookie": cookie})
+    landed = next(m for m in fresh["messages"] if m["id"] == mid)
+    assert landed["subject"] == "Invoice paid", "provider update was blocked"
+    assert landed["is_unread"] == 0
 
     _, _, after = call(live, "GET", "/api/view/inbox?min_importance=4",
                        headers={"Cookie": cookie})
