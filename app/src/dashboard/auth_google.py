@@ -41,6 +41,25 @@ PENDING_TTL_MINUTES = 10
 HTTP_TIMEOUT = 15
 
 
+# What Google's error codes actually mean for someone running this at home.
+# The raw codes are accurate and tell you nothing about what to do; the most
+# common one here, by a distance, is a refresh token that expired because the
+# Cloud project is still in Testing, where Google expires them after 7 days.
+EXPLAINED = {
+    "invalid_grant":
+        "Google no longer accepts this account's saved permission. If your "
+        "OAuth app is still in Testing, Google expires it after 7 days -- "
+        "reconnect the account in Settings.",
+    "invalid_client":
+        "Google rejected the client ID or secret. Check both in Settings.",
+    "unauthorized_client":
+        "This client is not allowed to use that grant. Check the OAuth "
+        "client is of type Web application.",
+    "invalid_scope":
+        "Google refused one of the requested permissions.",
+}
+
+
 class OAuthError(Exception):
     pass
 
@@ -146,8 +165,16 @@ def _post_form(url, fields):
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
             return json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
-        # Google's error body can echo request detail; never surface it.
-        raise OAuthError("token exchange failed (%s)" % e.code) from None
+        # OAuth 2 defines `error` as a fixed enum (RFC 6749 s5.2), so it is
+        # safe to surface. error_description is free text that can echo
+        # request detail back, so it never is.
+        code = ""
+        try:
+            code = str(json.loads(e.read().decode()).get("error", ""))[:40]
+        except Exception:
+            pass
+        raise OAuthError(EXPLAINED.get(code)
+                         or "token exchange failed (%s)" % e.code) from None
     except (urllib.error.URLError, TimeoutError) as e:
         raise OAuthError("could not reach Google: %s" % e.reason) from None
 

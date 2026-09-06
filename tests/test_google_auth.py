@@ -220,3 +220,53 @@ def test_the_flow_sends_the_same_uri_the_page_displays(conn, monkeypatch,
     sent = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)["redirect_uri"][0]
     assert sent == g.redirect_uri(conn)
     crypt.reset_for_tests()
+
+
+# ── what a failure tells you ──────────────────────────────────────────────
+def _http_error(payload, code=400):
+    import io
+    import json as _json
+    import urllib.error
+    return urllib.error.HTTPError(
+        "https://oauth2.googleapis.com/token", code, "Bad Request", {},
+        io.BytesIO(_json.dumps(payload).encode()))
+
+
+def test_an_expired_testing_mode_token_says_what_to_do(monkeypatch):
+    """The most common failure for a home install, and 'token exchange failed
+    (400)' tells you nothing about it."""
+    def boom(req, timeout=None):
+        raise _http_error({"error": "invalid_grant",
+                           "error_description": "Token has been expired"})
+    monkeypatch.setattr("urllib.request.urlopen", boom)
+    with pytest.raises(g.OAuthError) as e:
+        g.refresh("FAKE-REFRESH-TOKEN")
+    assert "reconnect" in str(e.value).lower()
+    assert "7 days" in str(e.value)
+
+
+def test_a_bad_client_secret_is_named_as_such(monkeypatch):
+    def boom(req, timeout=None):
+        raise _http_error({"error": "invalid_client"})
+    monkeypatch.setattr("urllib.request.urlopen", boom)
+    with pytest.raises(g.OAuthError, match="client ID or secret"):
+        g.refresh("FAKE-REFRESH-TOKEN")
+
+
+def test_googles_free_text_is_never_surfaced(monkeypatch):
+    """error_description can echo the request back, tokens included."""
+    def boom(req, timeout=None):
+        raise _http_error({"error": "invalid_grant",
+                           "error_description": "bad token FAKE-REFRESH-TOKEN"})
+    monkeypatch.setattr("urllib.request.urlopen", boom)
+    with pytest.raises(g.OAuthError) as e:
+        g.refresh("FAKE-REFRESH-TOKEN")
+    assert "FAKE-REFRESH-TOKEN" not in str(e.value)
+
+
+def test_an_unknown_code_still_fails_safely(monkeypatch):
+    def boom(req, timeout=None):
+        raise _http_error({"error": "something_new"})
+    monkeypatch.setattr("urllib.request.urlopen", boom)
+    with pytest.raises(g.OAuthError, match="400"):
+        g.refresh("FAKE-REFRESH-TOKEN")
