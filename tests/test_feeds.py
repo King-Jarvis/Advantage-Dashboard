@@ -208,3 +208,49 @@ def test_events_beyond_the_horizon_are_excluded_by_design(conn, acct):
     feeds.upsert_events(conn, acct, [ev("far", "2099-01-01T09:00:00")])
     assert feeds.agenda(conn, days=90, now="2026-09-10T08:00:00") == []
     assert len(feeds.agenda(conn, days=36500, now="2026-09-10T08:00:00")) == 1
+
+
+# ── the calendar grid's range query ───────────────────────────────────────
+def test_events_between_includes_the_past(conn, acct):
+    """A month grid must show days that already happened -- a month with the
+    first fortnight blank is not a month."""
+    feeds.upsert_events(conn, acct, [
+        ev("old", "2026-09-02T09:00:00"),
+        ev("new", "2026-09-20T09:00:00"),
+    ])
+    got = feeds.events_between(conn, "2026-09-01T00:00:00", "2026-09-30T23:59:59")
+    assert {e["source_uid"] for e in got} == {"old", "new"}
+
+
+def test_a_multi_day_event_appears_in_every_month_it_touches(conn, acct):
+    feeds.upsert_events(conn, acct, [
+        ev("trip", "2026-09-28T09:00:00", ends_at="2026-10-03T17:00:00"),
+    ])
+    sept = feeds.events_between(conn, "2026-09-01T00:00:00", "2026-09-30T23:59:59")
+    octo = feeds.events_between(conn, "2026-10-01T00:00:00", "2026-10-31T23:59:59")
+    assert [e["source_uid"] for e in sept] == ["trip"]
+    assert [e["source_uid"] for e in octo] == ["trip"], \
+        "an event spanning the boundary vanished from the second month"
+
+
+def test_events_outside_the_range_are_excluded(conn, acct):
+    feeds.upsert_events(conn, acct, [ev("far", "2026-12-01T09:00:00")])
+    assert feeds.events_between(conn, "2026-09-01T00:00:00",
+                                "2026-09-30T23:59:59") == []
+
+
+def test_cancelled_events_stay_out_of_the_grid(conn, acct):
+    feeds.upsert_events(conn, acct, [
+        ev("gone", "2026-09-10T09:00:00", status="cancelled", deleted=1),
+        ev("real", "2026-09-11T09:00:00"),
+    ])
+    got = feeds.events_between(conn, "2026-09-01T00:00:00", "2026-09-30T23:59:59")
+    assert [e["source_uid"] for e in got] == ["real"]
+
+
+def test_an_event_with_no_end_still_appears(conn, acct):
+    """ends_at is nullable, and COALESCE on an empty string is not the same as
+    on NULL -- both have to work or open-ended events disappear."""
+    feeds.upsert_events(conn, acct, [ev("open", "2026-09-15T09:00:00", ends_at="")])
+    got = feeds.events_between(conn, "2026-09-01T00:00:00", "2026-09-30T23:59:59")
+    assert [e["source_uid"] for e in got] == ["open"]

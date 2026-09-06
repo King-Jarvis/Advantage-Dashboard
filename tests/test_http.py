@@ -1147,3 +1147,36 @@ def test_the_ingest_key_can_be_set_in_settings(live, tmp_path, monkeypatch):
                         headers={"X-Ingest-Key": "the-wrong-key"})
     assert status == 401
     crypt.reset_for_tests()
+
+
+def test_calendar_endpoint_needs_a_range_and_returns_it(live, tmp_path,
+                                                        monkeypatch):
+    from dashboard import crypt, feeds
+    from dashboard import storage as st
+    acct = _google_account(tmp_path, monkeypatch)
+    conn = st.connect()
+    feeds.upsert_events(conn, acct, [
+        {"source_uid": "a", "starts_at": "2026-09-10T09:00:00", "title": "Standup"},
+        {"source_uid": "b", "starts_at": "2026-12-01T09:00:00", "title": "Later"},
+    ])
+    conn.close()
+    cookie, _ = login(live)
+
+    status, _, body = call(live, "GET",
+                           "/api/view/calendar?from=2026-09-01&to=2026-09-30",
+                           headers={"Cookie": cookie})
+    assert status == 200
+    assert [e["title"] for e in body["events"]] == ["Standup"]
+
+    # A grid without a range is a bug in the caller, not a default worth
+    # guessing at.
+    status, _, _ = call(live, "GET", "/api/view/calendar",
+                        headers={"Cookie": cookie})
+    assert status == 400
+    crypt.reset_for_tests()
+
+
+def test_calendar_needs_a_session(live):
+    status, _, _ = call(live, "GET",
+                        "/api/view/calendar?from=2026-09-01&to=2026-09-30")
+    assert status == 401

@@ -85,6 +85,26 @@ def agenda(conn, days=7, limit=100, now=None):
     return [dict(r) for r in rows]
 
 
+def events_between(conn, start, end, limit=500):
+    """Every event touching a date range, past ones included.
+
+    Deliberately not agenda(): a calendar grid must show the days that have
+    already happened, because a month with the first fortnight blank is not a
+    month. An event is included when it overlaps the range at all, so a
+    multi-day event appears in every month it touches rather than only the one
+    it started in.
+    """
+    rows = conn.execute(
+        "SELECT e.*, g.email account_email FROM events e"
+        " JOIN google_accounts g ON g.id = e.account_id"
+        " WHERE e.deleted=0 AND e.status <> 'cancelled'"
+        "   AND e.starts_at <= ?"
+        "   AND COALESCE(NULLIF(e.ends_at,''), e.starts_at) >= ?"
+        " ORDER BY e.starts_at LIMIT ?",
+        (end, start, limit)).fetchall()
+    return [dict(r) for r in rows]
+
+
 # ── mail ──────────────────────────────────────────────────────────────────
 def upsert_messages(conn, account_id, messages):
     """Write a batch of messages. Returns (written, skipped_dirty).

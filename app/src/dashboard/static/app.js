@@ -201,7 +201,7 @@ async function render() {
     }
   } else if (state.view === "agenda") {
     try {
-      await agendaView(body, { onSettings: () => go({ view: "settings" }) });
+      await agendaView(body, state);
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         state.user = null;
@@ -212,7 +212,7 @@ async function render() {
     }
   } else {
     try {
-      await inboxView(body, { onSettings: () => go({ view: "settings" }) });
+      await inboxView(body, state);
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         state.user = null;

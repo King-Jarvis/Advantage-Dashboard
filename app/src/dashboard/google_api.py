@@ -85,7 +85,13 @@ def access_token(conn, account_id, force=False):
 
 def _get(url, token, params=None):
     if params:
-        url = url + "?" + urllib.parse.urlencode(params)
+        # doseq, because Gmail wants metadataHeaders repeated rather than sent
+        # once. Without it urlencode serialises the list's repr as a single
+        # value, Gmail ignores the parameter and returns its own default set
+        # of headers -- which includes From, Subject and Date, so the call
+        # appears to work right up until you rely on a header outside that
+        # set and find it silently absent.
+        url = url + "?" + urllib.parse.urlencode(params, doseq=True)
     req = urllib.request.Request(
         url, headers={"Authorization": "Bearer " + token,
                       "Accept": "application/json"})
@@ -251,31 +257,53 @@ def _split_from(value):
     return text, text.lower()
 
 
-def _baseline(labels):
-    """A first-pass importance from Gmail's own signals, with its reason.
+def _baseline(labels, bulk=False, direct=False):
+    """A first-pass importance from signals that cost nothing to read.
 
-    This is deliberately dull and explainable. It exists so the inbox is
-    useful before any model has run, and so there is always a reason string
-    to show -- a score with no reason can only be trusted blindly or ignored.
-    A classifier may overwrite both later; an operator's correction may not
-    be overwritten by either.
+    Deliberately dull and explainable. It exists so the inbox is useful before
+    any model has run, and so there is always a reason to show -- a score with
+    no reason can only be trusted blindly or ignored.
+
+    The two signals that matter most are not Gmail's own labels. Mail carrying
+    List-Unsubscribe is, by its own admission, bulk: no human typed it to you.
+    Mail addressed to you by name in To is the opposite. Without those, every
+    unread message scores alike and the ranking says nothing -- which is how
+    an inbox ends up showing twenty-six newsletters and one real message all
+    at the same weight.
     """
     labels = set(labels or [])
-    if "IMPORTANT" in labels and "UNREAD" in labels:
+    promo = "CATEGORY_PROMOTIONS" in labels or "CATEGORY_SOCIAL" in labels
+    unread = "UNREAD" in labels
+
+    if "STARRED" in labels:
+        return 5, "you starred it"
+    if "IMPORTANT" in labels and unread:
         return 4, "Gmail marked this important and it is unread"
     if "IMPORTANT" in labels:
         return 3, "Gmail marked this important"
-    if "STARRED" in labels:
-        return 4, "you starred it"
-    if "CATEGORY_PROMOTIONS" in labels or "CATEGORY_SOCIAL" in labels:
-        return 1, "promotional or social mail"
-    if "UNREAD" in labels:
-        return 2, "unread"
-    return 2, "no strong signal either way"
+
+    if bulk and promo:
+        return 1, "a promotional mailing you can unsubscribe from"
+    if bulk:
+        return 2, "a mailing list or newsletter"
+    if promo:
+        return 2, "promotional or social mail"
+
+    # Nothing says bulk, so a person plausibly sent this.
+    if direct and unread:
+        return 4, "addressed to you directly, and unread"
+    if direct:
+        return 3, "addressed to you directly"
+    if unread:
+        return 3, "unread, and not a mailing"
+    return 2, "read, and not a mailing"
 
 
 def fetch_messages(conn, account_id, query="-in:chats newer_than:14d",
                    max_results=MAX_MESSAGES):
+    row = conn.execute("SELECT email FROM google_accounts WHERE id=?",
+                       (account_id,)).fetchone()
+    mine = (row["email"] or "").lower() if row else ""
     listing = _get_retrying(conn, account_id, GMAIL_LIST, {
         "maxResults": min(int(max_results), MAX_MESSAGES),
         "q": query,
@@ -289,14 +317,17 @@ def fetch_messages(conn, account_id, query="-in:chats newer_than:14d",
             full = _get_retrying(
                 conn, account_id, GMAIL_GET % urllib.parse.quote(mid),
                 {"format": "metadata",
-                 "metadataHeaders": ["From", "Subject", "Date"]})
+                 "metadataHeaders": ["From", "Subject", "Date", "To",
+                                     "List-Unsubscribe"]})
         except GoogleError:
             # One unreadable message must not lose the other thirty-nine.
             continue
         headers = (full.get("payload") or {}).get("headers", [])
         labels = full.get("labelIds", []) or []
         name, addr = _split_from(_header(headers, "From"))
-        score, reason = _baseline(labels)
+        bulk = bool(_header(headers, "List-Unsubscribe"))
+        direct = bool(mine) and mine in _header(headers, "To").lower()
+        score, reason = _baseline(labels, bulk=bulk, direct=direct)
         received = ""
         if full.get("internalDate"):
             received = _dt.datetime.fromtimestamp(

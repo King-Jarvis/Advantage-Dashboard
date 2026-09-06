@@ -33,7 +33,10 @@ SPEC = {
 
     "mail_poll_seconds": ("int", 30, "How often mail is checked"),
     "calendar_poll_seconds": ("int", 30, "How often the calendar is checked"),
-    "inbox_min_importance": ("int", 3, "Only show mail scoring at least this"),
+    # 2, not 3: on a real mailbox a threshold of 3 hides everything that is
+    # merely unread, which on first sync meant showing one message out of
+    # forty. A filter nobody can see is indistinguishable from a broken feed.
+    "inbox_min_importance": ("int", 2, "Only show mail scoring at least this"),
 
     "anthropic_api_key": ("secret", "", "Enables the model-backed features"),
     # Google builds the redirect URI from this, so it must match how you

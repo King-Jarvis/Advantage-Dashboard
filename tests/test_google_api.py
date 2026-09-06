@@ -54,14 +54,48 @@ def test_importance_always_has_a_reason():
     # A score with no reason can only be trusted blindly or ignored.
     for labels in ([], ["IMPORTANT"], ["UNREAD"], ["STARRED"],
                    ["CATEGORY_PROMOTIONS"], ["IMPORTANT", "UNREAD"]):
-        score, reason = google_api._baseline(labels)
-        assert 1 <= score <= 5
-        assert reason
+        for bulk in (False, True):
+            for direct in (False, True):
+                score, reason = google_api._baseline(labels, bulk, direct)
+                assert 1 <= score <= 5
+                assert reason
 
 
-def test_promotions_rank_below_unread():
-    assert google_api._baseline(["CATEGORY_PROMOTIONS"])[0] < \
+def test_a_newsletter_ranks_below_a_person(conn):
+    """The signal that matters: List-Unsubscribe means no human typed it."""
+    newsletter = google_api._baseline(["UNREAD"], bulk=True)[0]
+    person = google_api._baseline(["UNREAD"], bulk=False, direct=True)[0]
+    assert newsletter < person
+
+
+def test_addressed_to_you_outranks_merely_unread():
+    assert google_api._baseline(["UNREAD"], direct=True)[0] > \
            google_api._baseline(["UNREAD"])[0]
+
+
+def test_a_promotional_mailing_is_the_floor():
+    assert google_api._baseline(["UNREAD", "CATEGORY_PROMOTIONS"],
+                                bulk=True)[0] == 1
+
+
+def test_starring_something_outranks_everything():
+    starred = google_api._baseline(["STARRED", "CATEGORY_PROMOTIONS"],
+                                   bulk=True)[0]
+    assert starred == 5, "an explicit human signal was overridden by a label"
+
+
+def test_the_scores_actually_spread(conn):
+    """A ranking where everything scores alike ranks nothing."""
+    cases = [
+        (["UNREAD", "CATEGORY_PROMOTIONS"], True, False),
+        (["UNREAD"], True, False),
+        (["UNREAD"], False, False),
+        (["UNREAD"], False, True),
+        (["STARRED"], False, False),
+    ]
+    scores = [google_api._baseline(lab, b, d)[0] for lab, b, d in cases]
+    assert len(set(scores)) >= 4, "scores bunched together: %r" % (scores,)
+    assert scores == sorted(scores), "not monotonic: %r" % (scores,)
 
 
 # ── access tokens ─────────────────────────────────────────────────────────
@@ -173,6 +207,30 @@ def _mail(monkeypatch, listing, bodies):
             raise got
         return got
     monkeypatch.setattr(google_api, "_get_retrying", fake)
+
+
+def test_a_newsletter_and_a_person_get_different_scores(conn, acct, monkeypatch):
+    """End to end through the mapper, with the headers Gmail actually sends."""
+    def hdrs(pairs):
+        return [{"name": k, "value": v} for k, v in pairs]
+    _mail(monkeypatch, {"messages": [{"id": "n1"}, {"id": "p1"}]}, {
+        "n1": {"id": "n1", "labelIds": ["INBOX", "UNREAD"],
+               "internalDate": "1756713600000",
+               "payload": {"headers": hdrs([
+                   ("From", "News <news@example.com>"),
+                   ("To", "a@example.com"),
+                   ("List-Unsubscribe", "<https://example.com/u>"),
+                   ("Subject", "Weekly digest")])}},
+        "p1": {"id": "p1", "labelIds": ["INBOX", "UNREAD"],
+               "internalDate": "1756713600000",
+               "payload": {"headers": hdrs([
+                   ("From", "Sam <sam@example.com>"),
+                   ("To", "a@example.com"),
+                   ("Subject", "are you free thursday")])}},
+    })
+    by_id = {m["source_uid"]: m for m in google_api.fetch_messages(conn, acct)}
+    assert by_id["p1"]["importance"] > by_id["n1"]["importance"]
+    assert "mailing" in by_id["n1"]["reason"]
 
 
 def test_one_unreadable_message_does_not_lose_the_others(conn, acct, monkeypatch):
@@ -359,3 +417,26 @@ def test_a_401_is_still_a_token_problem_not_a_403_message(monkeypatch):
     monkeypatch.setattr("urllib.request.urlopen", boom)
     with pytest.raises(google_api._Unauthorized):
         google_api._get(google_api.GMAIL_LIST, "tok")
+
+
+def test_list_parameters_are_repeated_not_stringified(monkeypatch):
+    """Gmail wants metadataHeaders=A&metadataHeaders=B. Sent as a repr it is
+    ignored, and the headers come back as Gmail's default set -- which quietly
+    excludes the ones the classifier depends on."""
+    seen = {}
+
+    class FakeResp:
+        def read(self): return b"{}"
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake(req, timeout=None):
+        seen["url"] = req.full_url
+        return FakeResp()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake)
+    google_api._get("https://x/y", "tok",
+                    {"metadataHeaders": ["From", "List-Unsubscribe"]})
+    assert "metadataHeaders=From" in seen["url"]
+    assert "metadataHeaders=List-Unsubscribe" in seen["url"]
+    assert "%5B" not in seen["url"], "a list was serialised as its repr"

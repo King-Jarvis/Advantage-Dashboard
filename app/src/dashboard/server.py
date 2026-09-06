@@ -74,6 +74,7 @@ ROUTES = [
     ("overview", {"GET"},         re.compile(r"^/api/view/overview$"),     "session"),
     ("home",     {"GET"},         re.compile(r"^/api/view/home$"),         "session"),
     ("agenda",   {"GET"},         re.compile(r"^/api/view/agenda$"),       "session"),
+    ("calendar", {"GET"},         re.compile(r"^/api/view/calendar$"),     "session"),
     ("inbox",    {"GET"},         re.compile(r"^/api/view/inbox$"),        "session"),
     ("syncst",   {"GET"},         re.compile(r"^/api/view/status$"),       "session"),
     ("editmsg",  {"PATCH"},
@@ -468,6 +469,19 @@ class Handler(BaseHTTPRequestHandler):
         days = self._int_arg("days", 7, 1, 90)
         self.json_out({"days": days,
                        "events": feeds.agenda(conn, days=days, limit=200)})
+
+    def api_calendar(self, conn, session):
+        """A month of events for the grid, addressed by month rather than by
+        a day count -- the caller is drawing a calendar, not a horizon."""
+        q = self.query()
+        start = (q.get("from") or [""])[0][:10]
+        end = (q.get("to") or [""])[0][:10]
+        if not (len(start) == 10 and len(end) == 10):
+            raise ValueError("from and to are required, as YYYY-MM-DD")
+        self.json_out({
+            "from": start, "to": end,
+            "events": feeds.events_between(conn, start + "T00:00:00",
+                                           end + "T23:59:59")})
 
     def api_inbox(self, conn, session):
         floor = settings.get(conn, "inbox_min_importance")
