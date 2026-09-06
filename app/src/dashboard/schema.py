@@ -9,7 +9,7 @@ operation is not optional.
 """
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # Foreign keys are off by default in SQLite and must be enabled per
 # connection, not once per database. Enforced in storage.connect().
@@ -215,7 +215,12 @@ CREATE TABLE IF NOT EXISTS oauth_pending (
 CREATE TABLE IF NOT EXISTS events (
     id           TEXT PRIMARY KEY,
     account_id   TEXT NOT NULL REFERENCES google_accounts(id) ON DELETE CASCADE,
-    source_uid   TEXT NOT NULL,             -- the provider's own id
+    -- The provider's own id. An event created here has no Google id yet, so
+    -- it carries a 'local:<uuid>' placeholder until the insert comes back
+    -- with the real one. A placeholder rather than NULL because dropping the
+    -- NOT NULL and the UNIQUE would mean rebuilding the table, and rebuilding
+    -- a table that holds real data is a bad trade for a cosmetic nicety.
+    source_uid   TEXT NOT NULL,
     calendar_id  TEXT NOT NULL DEFAULT '',
     title        TEXT NOT NULL DEFAULT '',
     description  TEXT NOT NULL DEFAULT '',
@@ -319,9 +324,47 @@ CREATE TABLE IF NOT EXISTS audit_log (
 """
 
 
+# Columns added after version 1. CREATE TABLE IF NOT EXISTS does nothing to a
+# table that already exists, so a new column has to be added explicitly or it
+# will simply never appear on any database that predates it -- which is every
+# installation that already holds data.
+ADDED_COLUMNS = [
+    # Gmail actions that push back, and the body we fetch on demand.
+    ("messages", "trashed", "INTEGER NOT NULL DEFAULT 0"),
+    ("messages", "is_spam", "INTEGER NOT NULL DEFAULT 0"),
+    ("messages", "body_text", "TEXT"),
+    ("messages", "body_fetched_at", "TEXT"),
+    ("messages", "push_error", "TEXT NOT NULL DEFAULT ''"),
+    # Why a push failed, and an intent to delete that survives until it lands.
+    ("events", "push_error", "TEXT NOT NULL DEFAULT ''"),
+    ("events", "pending_delete", "INTEGER NOT NULL DEFAULT 0"),
+    ("events", "etag", "TEXT NOT NULL DEFAULT ''"),
+]
+
+
+def has_column(conn, table, name):
+    return any(r[1] == name for r in
+               conn.execute("PRAGMA table_info(%s)" % table).fetchall())
+
+
+def add_column(conn, table, name, decl):
+    """Add a column if it is missing. Returns True when it did something.
+
+    ALTER TABLE ADD COLUMN is the one schema change SQLite does cheaply and
+    without rewriting the table, which is what makes this safe to run against
+    a live database on every start.
+    """
+    if has_column(conn, table, name):
+        return False
+    conn.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, name, decl))
+    return True
+
+
 def migrate(conn):
     """Apply the schema. Safe to call on every start."""
     conn.executescript(DDL)
+    for table, name, decl in ADDED_COLUMNS:
+        add_column(conn, table, name, decl)
     cur = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'")
     row = cur.fetchone()
     if row is None:
