@@ -36,6 +36,15 @@ SPEC = {
     "inbox_min_importance": ("int", 3, "Only show mail scoring at least this"),
 
     "anthropic_api_key": ("secret", "", "Enables the model-backed features"),
+    # Google builds the redirect URI from this, so it must match how you
+    # actually reach the dashboard -- and Google will not accept a raw IP.
+    # Empty by default on purpose: settings.get returns the spec default, so
+    # a non-empty one here would silently override the BASE_URL environment
+    # variable and make that fallback dead code. The real default lives in
+    # auth_google.redirect_uri, after both lookups have had their turn.
+    "base_url": ("text", "",
+                 "Where you reach this dashboard, e.g. https://localhost:8766."
+                 " Google builds its redirect from it and rejects raw IPs."),
     "google_client_id":  ("text", "", "From your Google Cloud project"),
     "google_client_secret": ("secret", "", "From your Google Cloud project"),
     # Held here rather than in the environment so the whole setup can be done
@@ -61,6 +70,7 @@ LABELS = {
     "calendar_poll_seconds": "Calendar check (seconds)",
     "inbox_min_importance": "Inbox importance threshold",
     "anthropic_api_key": "Anthropic API key",
+    "base_url": "Dashboard address",
     "google_client_id": "Google client ID",
     "google_client_secret": "Google client secret",
     "ingest_key": "n8n ingest key",

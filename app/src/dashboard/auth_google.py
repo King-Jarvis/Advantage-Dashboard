@@ -85,8 +85,17 @@ def client_secret(conn=None):
     return os.environ.get("GOOGLE_CLIENT_SECRET", "")
 
 
-def redirect_uri():
-    base = os.environ.get("BASE_URL", "http://localhost:8766").rstrip("/")
+def redirect_uri(conn=None):
+    """Where Google sends the browser back to.
+
+    Defaults to https because the installer always generates a certificate,
+    and the browser refuses this application outside a secure context anyway.
+    An http default merely guaranteed a mismatch that Google reports as
+    redirect_uri_mismatch, which names the symptom and not the cause.
+    """
+    base = (_from_settings(conn, "base_url")
+            or os.environ.get("BASE_URL")
+            or "https://localhost:8766").rstrip("/")
     return base + "/api/auth/google/callback"
 
 
@@ -180,7 +189,7 @@ def begin(conn, purpose="signin", return_to="/"):
     scopes = SIGNIN_SCOPES if purpose == "signin" else SIGNIN_SCOPES + CONNECT_SCOPES
     params = {
         "client_id": client_id(conn),
-        "redirect_uri": redirect_uri(),
+        "redirect_uri": redirect_uri(conn),
         "response_type": "code",
         "scope": " ".join(scopes),
         "state": state,
@@ -216,7 +225,7 @@ def exchange(code, verifier, conn=None):
         "code": code,
         "client_id": client_id(conn),
         "client_secret": client_secret(conn),
-        "redirect_uri": redirect_uri(),
+        "redirect_uri": redirect_uri(conn),
         "grant_type": "authorization_code",
         "code_verifier": verifier,
     })

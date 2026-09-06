@@ -947,7 +947,7 @@ class Handler(BaseHTTPRequestHandler):
             "has_client_secret": bool(auth_google.client_secret(conn)),
             # Enough to spot a wrong project pasted in, without echoing it.
             "client_id_hint": (cid[:12] + "…" + cid[-18:]) if len(cid) > 34 else cid,
-            "redirect_uri": auth_google.redirect_uri(),
+            "redirect_uri": auth_google.redirect_uri(conn),
         })
 
     def api_g_connect(self, conn, session):

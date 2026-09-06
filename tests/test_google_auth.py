@@ -160,3 +160,63 @@ def test_purge_removes_only_expired(conn, configured):
     conn.commit()
     assert g.purge_expired(conn) == 1
     assert g.take_pending(conn, live) is not None
+
+
+# ── the redirect URI Google must be told about ────────────────────────────
+def test_redirect_uri_defaults_to_https(monkeypatch):
+    """An http default guaranteed a redirect_uri_mismatch, because the
+    installer always serves TLS and the browser requires it anyway."""
+    monkeypatch.delenv("BASE_URL", raising=False)
+    uri = g.redirect_uri()
+    assert uri.startswith("https://"), uri
+    assert uri.endswith("/api/auth/google/callback")
+
+
+def test_a_saved_base_url_wins_over_the_environment(conn, monkeypatch, tmp_path):
+    from dashboard import crypt, settings
+    k = tmp_path / "k"
+    k.write_text("a-long-random-secret-for-these-tests")
+    monkeypatch.setenv("TOKEN_KEY_PATH", str(k))
+    crypt.reset_for_tests()
+    monkeypatch.setenv("BASE_URL", "https://from-the-environment:9999")
+    settings.set_(conn, "base_url", "https://from-the-settings-page:8766")
+    # Settings first, so a fix typed into the browser takes effect on the next
+    # request rather than the next restart.
+    assert g.redirect_uri(conn) == \
+        "https://from-the-settings-page:8766/api/auth/google/callback"
+    crypt.reset_for_tests()
+
+
+def test_a_trailing_slash_does_not_double_up(conn, monkeypatch, tmp_path):
+    """Google matches the redirect URI as an exact string, so a double slash
+    is a mismatch and the message names neither the slash nor the cause."""
+    from dashboard import crypt, settings
+    k = tmp_path / "k"
+    k.write_text("a-long-random-secret-for-these-tests")
+    monkeypatch.setenv("TOKEN_KEY_PATH", str(k))
+    crypt.reset_for_tests()
+    settings.set_(conn, "base_url", "https://localhost:8766/")
+    assert g.redirect_uri(conn) == \
+        "https://localhost:8766/api/auth/google/callback"
+    crypt.reset_for_tests()
+
+
+def test_the_flow_sends_the_same_uri_the_page_displays(conn, monkeypatch,
+                                                       tmp_path):
+    """These drifting apart is the whole failure mode: you paste what the page
+    shows into Google, and the flow sends something else."""
+    import urllib.parse
+
+    from dashboard import crypt, settings
+    k = tmp_path / "k"
+    k.write_text("a-long-random-secret-for-these-tests")
+    monkeypatch.setenv("TOKEN_KEY_PATH", str(k))
+    crypt.reset_for_tests()
+    settings.set_(conn, "base_url", "https://localhost:8766")
+    settings.set_(conn, "google_client_id", "cid.apps.googleusercontent.com")
+    settings.set_(conn, "google_client_secret", "shh")
+
+    url = g.begin(conn, purpose="signin")
+    sent = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)["redirect_uri"][0]
+    assert sent == g.redirect_uri(conn)
+    crypt.reset_for_tests()
