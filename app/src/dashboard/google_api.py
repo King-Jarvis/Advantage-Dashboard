@@ -95,10 +95,55 @@ def _get(url, token, params=None):
     except urllib.error.HTTPError as e:
         if e.code == 401:
             raise _Unauthorized() from None
-        # Google's error body can echo request detail, tokens included.
-        raise GoogleError("Google API error (%s)" % e.code) from None
+        # Google's `reason` is a fixed enum, so it is safe to read and worth
+        # translating. The human-readable `message` beside it is free text
+        # that echoes the request back, so it is never surfaced.
+        reason = ""
+        try:
+            err = json.loads(e.read().decode()).get("error", {})
+            details = err.get("errors") or [{}]
+            reason = str(details[0].get("reason") or err.get("status") or "")[:60]
+        except Exception:
+            pass
+        raise GoogleError(_explain(reason, url, e.code)) from None
     except (urllib.error.URLError, TimeoutError) as e:
         raise GoogleError("could not reach Google: %s" % e.reason) from None
+
+
+def _api_name(url):
+    return "Calendar" if url.startswith(CAL_URL) else "Gmail"
+
+
+def _enable_link(url):
+    return ("https://console.cloud.google.com/apis/library/"
+            + ("calendar-json.googleapis.com" if url.startswith(CAL_URL)
+               else "gmail.googleapis.com"))
+
+
+def _explain(reason, url, code):
+    """Turn Google's error code into the thing you actually have to go do.
+
+    A bare 403 is the single most common wall when first connecting a new
+    Cloud project, and it means the API was never switched on -- which the
+    status code does not hint at even slightly.
+    """
+    api = _api_name(url)
+    if reason in ("accessNotConfigured", "SERVICE_DISABLED"):
+        return ("The %s API is not enabled in your Google Cloud project. "
+                "Enable it at %s, wait a minute, then sync again."
+                % (api, _enable_link(url)))
+    if reason in ("insufficientPermissions", "ACCESS_TOKEN_SCOPE_INSUFFICIENT",
+                  "forbidden"):
+        return ("This account has not granted the permissions the %s API "
+                "needs. Reconnect it in Settings and accept both requests."
+                % api)
+    if reason in ("rateLimitExceeded", "userRateLimitExceeded",
+                  "quotaExceeded", "RESOURCE_EXHAUSTED"):
+        return ("Google is rate limiting the %s API. This usually clears on "
+                "its own; the next sync will retry." % api)
+    if reason:
+        return "%s API refused the request (%s, HTTP %s)" % (api, reason, code)
+    return "%s API error (HTTP %s)" % (api, code)
 
 
 class _Unauthorized(Exception):

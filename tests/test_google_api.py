@@ -274,3 +274,88 @@ def test_local_edits_are_reported_as_held(conn, acct, monkeypatch):
          "subject": "x"}])
     out = sync.run(conn)
     assert out["results"][0]["messages_held"] == 1
+
+
+# ── what a 403 tells you ──────────────────────────────────────────────────
+def _api_error(payload, code=403):
+    import io
+    import json as _json
+    import urllib.error
+    return urllib.error.HTTPError("https://gmail.googleapis.com/x", code,
+                                  "Forbidden", {},
+                                  io.BytesIO(_json.dumps(payload).encode()))
+
+
+DISABLED = {"error": {"code": 403, "status": "PERMISSION_DENIED",
+                      "message": "Gmail API has not been used in project "
+                                 "123456789 before or it is disabled",
+                      "errors": [{"reason": "accessNotConfigured"}]}}
+
+
+def test_a_disabled_api_says_which_one_and_where_to_enable_it(monkeypatch):
+    """The most common wall when connecting a fresh Cloud project, and '403'
+    does not hint at it even slightly."""
+    def boom(req, timeout=None):
+        raise _api_error(DISABLED)
+    monkeypatch.setattr("urllib.request.urlopen", boom)
+    with pytest.raises(google_api.GoogleError) as e:
+        google_api._get(google_api.GMAIL_LIST, "tok")
+    msg = str(e.value)
+    assert "Gmail API is not enabled" in msg
+    assert "console.cloud.google.com/apis/library/gmail.googleapis.com" in msg
+
+
+def test_the_calendar_variant_names_the_calendar_api(monkeypatch):
+    def boom(req, timeout=None):
+        raise _api_error(DISABLED)
+    monkeypatch.setattr("urllib.request.urlopen", boom)
+    with pytest.raises(google_api.GoogleError) as e:
+        google_api._get(google_api.CAL_URL, "tok")
+    msg = str(e.value)
+    assert "Calendar API is not enabled" in msg
+    assert "calendar-json.googleapis.com" in msg
+
+
+def test_googles_message_is_never_surfaced(monkeypatch):
+    """It echoes the request back, project number included."""
+    def boom(req, timeout=None):
+        raise _api_error(DISABLED)
+    monkeypatch.setattr("urllib.request.urlopen", boom)
+    with pytest.raises(google_api.GoogleError) as e:
+        google_api._get(google_api.GMAIL_LIST, "tok")
+    assert "123456789" not in str(e.value)
+
+
+def test_missing_scopes_point_at_reconnecting(monkeypatch):
+    def boom(req, timeout=None):
+        raise _api_error({"error": {"errors": [
+            {"reason": "insufficientPermissions"}]}})
+    monkeypatch.setattr("urllib.request.urlopen", boom)
+    with pytest.raises(google_api.GoogleError, match="Reconnect"):
+        google_api._get(google_api.GMAIL_LIST, "tok")
+
+
+def test_rate_limiting_says_it_will_retry(monkeypatch):
+    def boom(req, timeout=None):
+        raise _api_error({"error": {"errors": [{"reason": "rateLimitExceeded"}]}},
+                         code=429)
+    monkeypatch.setattr("urllib.request.urlopen", boom)
+    with pytest.raises(google_api.GoogleError, match="rate limit"):
+        google_api._get(google_api.GMAIL_LIST, "tok")
+
+
+def test_an_unknown_reason_still_reports_usefully(monkeypatch):
+    def boom(req, timeout=None):
+        raise _api_error({"error": {"errors": [{"reason": "somethingNew"}]}})
+    monkeypatch.setattr("urllib.request.urlopen", boom)
+    with pytest.raises(google_api.GoogleError, match="somethingNew"):
+        google_api._get(google_api.GMAIL_LIST, "tok")
+
+
+def test_a_401_is_still_a_token_problem_not_a_403_message(monkeypatch):
+    """401 must stay on the refresh-and-retry path, not become prose."""
+    def boom(req, timeout=None):
+        raise _api_error({"error": {}}, code=401)
+    monkeypatch.setattr("urllib.request.urlopen", boom)
+    with pytest.raises(google_api._Unauthorized):
+        google_api._get(google_api.GMAIL_LIST, "tok")
