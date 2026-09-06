@@ -19,7 +19,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from . import auth_google, crypt, settings
+from . import auth_google, crypt, mailtext, settings
 
 CAL_URL = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
 GMAIL_LIST = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
@@ -293,6 +293,18 @@ def fetch_events(conn, account_id, days_back=1, days_ahead=21):
 
 
 # ── mail ──────────────────────────────────────────────────────────────────
+def fetch_body(conn, account_id, source_uid):
+    """The readable text of one message, fetched in full.
+
+    Deliberately one at a time and only when asked. Fetching format=full for
+    every message during sync would multiply the request count by the size of
+    the mailbox and buy nothing -- the list view never shows a body.
+    """
+    full = _get_retrying(conn, account_id, GMAIL_GET % urllib.parse.quote(source_uid),
+                         {"format": "full"})
+    return mailtext.from_payload(full.get("payload") or {})
+
+
 def _header(headers, name):
     lowered = name.lower()
     for h in headers:

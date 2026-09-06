@@ -173,8 +173,17 @@ def inbox(conn, min_importance=3, limit=50, include_archived=False):
     where = ["m.deleted=0"]
     if not include_archived:
         where.append("m.archived=0")
+    # Every column except the body. m.* would ship up to 256 KB per message
+    # once bodies are cached, turning a list of forty headers into megabytes
+    # -- and the list never shows a body. It is fetched per message instead.
     rows = conn.execute(
-        "SELECT m.*, %s AS score, g.email account_email FROM messages m"
+        "SELECT m.id, m.account_id, m.source_uid, m.thread_id, m.sender,"
+        " m.sender_email, m.subject, m.snippet, m.received_at, m.is_unread,"
+        " m.is_starred, m.archived, m.trashed, m.is_spam, m.labels,"
+        " m.importance, m.importance_override, m.reason, m.model,"
+        " m.classified_at, m.dirty, m.push_error,"
+        " m.body_text IS NOT NULL AS has_body,"
+        " %s AS score, g.email account_email FROM messages m"
         " JOIN google_accounts g ON g.id = m.account_id"
         " WHERE %s AND %s >= ?"
         " ORDER BY score DESC, m.received_at DESC LIMIT ?"
@@ -215,6 +224,28 @@ def set_message(conn, message_id, **fields):
     conn.execute("UPDATE messages SET %s WHERE id=?" % sets,
                  [*values, message_id])
     conn.commit()
+
+
+def message_body(conn, message_id, fetch=None):
+    """The body text, fetched once and remembered.
+
+    `fetch` is injected so the caller supplies the network, which keeps this
+    module free of Google and keeps the tests free of the network.
+    """
+    row = conn.execute(
+        "SELECT id, account_id, source_uid, body_text, body_fetched_at"
+        " FROM messages WHERE id=? AND deleted=0", (message_id,)).fetchone()
+    if row is None:
+        raise KeyError(message_id)
+    if row["body_text"] is not None:
+        return row["body_text"], True
+    if fetch is None:
+        return "", False
+    text = fetch(row["account_id"], row["source_uid"]) or ""
+    conn.execute("UPDATE messages SET body_text=?, body_fetched_at=? WHERE id=?",
+                 (text, _now(), message_id))
+    conn.commit()
+    return text, False
 
 
 # ── sync bookkeeping ──────────────────────────────────────────────────────

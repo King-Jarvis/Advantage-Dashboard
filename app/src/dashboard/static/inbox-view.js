@@ -28,6 +28,12 @@ const BANDS = [
   { id: "starred", label: "Starred", min: 0, starred: true },
 ];
 
+/* Gmail's own view of the thread. We deliberately do not compose, so this is
+ * the honest way to reply rather than pretending the feature is missing. */
+function gmailLink(m) {
+  return `https://mail.google.com/mail/u/0/#all/${encodeURIComponent(m.thread_id || "")}`;
+}
+
 function ago(iso) {
   const then = new Date(String(iso).length <= 10 ? `${iso}T00:00:00` : iso);
   if (Number.isNaN(then.getTime())) return "";
@@ -51,6 +57,8 @@ export async function inboxView(root, state) {
   let all = [];
   let band = state.inboxBand || "all";
   let busy = new Set();
+  let openId = null;
+  const bodies = new Map();     // id -> text, so reopening never refetches
 
   const list = el("div", { class: "mail-list" });
   const status = el("div", { class: "hint" });
@@ -58,21 +66,43 @@ export async function inboxView(root, state) {
 
   function shown() {
     const b = BANDS.find((x) => x.id === band) || BANDS[0];
-    return all.filter((m) => {
-      const score = m.importance_override ?? m.importance ?? 0;
-      if (b.unread && !m.is_unread) return false;
-      if (b.starred && !m.is_starred) return false;
-      return score >= b.min;
-    });
+    // One predicate for both the list and the chip counts, so a chip can
+    // never say 12 and show 11.
+    return all.filter((m) => matches(m, b));
+  }
+
+  function matches(m, b) {
+    const score = m.importance_override ?? m.importance ?? 0;
+    // Something you binned should not sit in the list looking undecided.
+    if (m.trashed) return false;
+    if (b.unread && !m.is_unread) return false;
+    if (b.starred && !m.is_starred) return false;
+    return score >= b.min;
   }
 
   function count(b) {
-    return all.filter((m) => {
-      const score = m.importance_override ?? m.importance ?? 0;
-      if (b.unread && !m.is_unread) return false;
-      if (b.starred && !m.is_starred) return false;
-      return score >= b.min;
-    }).length;
+    return all.filter((m) => matches(m, b)).length;
+  }
+
+  async function openRow(m) {
+    // Toggling closed must not clear the cache: reopening is free.
+    if (openId === m.id) { openId = null; render(); return; }
+    openId = m.id;
+    // Opening a message is reading it, so say so -- and only once.
+    if (m.is_unread) act(m, { is_unread: 0 });
+    render();
+    if (bodies.has(m.id)) return;
+    bodies.set(m.id, null);                        // null == in flight
+    try {
+      const r = await get(`/api/view/message/${m.id}`);
+      bodies.set(m.id, r.body || "");
+    } catch (err) {
+      bodies.set(m.id,
+        err && err.status === 502
+          ? "Gmail would not return this message."
+          : "Could not load this message.");
+    }
+    if (openId === m.id) render();
   }
 
   async function act(m, patchBody) {
@@ -127,24 +157,64 @@ export async function inboxView(root, state) {
         onclick: (e) => { e.stopPropagation(); act(m, { importance_override: n }); },
       }, el("span", { text: String(n) }))));
 
+    function icon(cls, label, glyph, patchBody, confirm) {
+      return el("button", {
+        type: "button", class: "iconbtn" + cls, title: label,
+        "aria-label": label,
+        onclick: (e) => {
+          e.stopPropagation();
+          // Trash and spam are the two a mis-click actually costs you.
+          if (confirm && !window.confirm(confirm)) return;
+          act(m, patchBody);
+        },
+      }, el("span", { text: glyph }));
+    }
+
     const actions = el("div", { class: "mail-actions" },
-      el("button", {
-        type: "button", class: "iconbtn" + (m.is_starred ? " on" : ""),
-        title: m.is_starred ? "Unstar" : "Star",
-        "aria-label": m.is_starred ? "Unstar" : "Star",
-        onclick: (e) => { e.stopPropagation(); act(m, { is_starred: m.is_starred ? 0 : 1 }); },
-      }, el("span", { text: m.is_starred ? "★" : "☆" })),
-      el("button", {
-        type: "button", class: "iconbtn",
-        title: m.archived ? "Un-archive" : "Archive",
-        "aria-label": m.archived ? "Un-archive" : "Archive",
-        onclick: (e) => { e.stopPropagation(); act(m, { archived: m.archived ? 0 : 1 }); },
-      }, el("span", { text: m.archived ? "↩" : "✓" })));
+      icon(m.is_starred ? " on" : "", m.is_starred ? "Unstar" : "Star",
+           m.is_starred ? "★" : "☆", { is_starred: m.is_starred ? 0 : 1 }),
+      icon("", m.is_unread ? "Mark as read" : "Mark as unread",
+           m.is_unread ? "○" : "●", { is_unread: m.is_unread ? 0 : 1 }),
+      icon("", m.archived ? "Move to inbox" : "Archive",
+           m.archived ? "↩" : "✓", { archived: m.archived ? 0 : 1 }),
+      icon("", m.is_spam ? "Not spam" : "Report spam", "⌀",
+           { is_spam: m.is_spam ? 0 : 1 },
+           m.is_spam ? null : "Report this as spam? It moves out of your inbox in Gmail."),
+      icon(" danger", "Move to bin", "🗑",
+           { trashed: 1 },
+           "Move this to the bin in Gmail?"));
+
+    const isOpen = openId === m.id;
+    const body = bodies.get(m.id);
+    const expanded = !isOpen ? null : el("div", { class: "mail-open" },
+      body === undefined || body === null
+        ? el("p", { class: "hint", text: "Loading…" })
+        : body === ""
+          ? el("p", { class: "hint", text: "This message has no text — "
+              + "it may be an image or an attachment." })
+          : el("pre", { class: "mail-text", text: body }),
+      el("div", { class: "mail-open-foot" },
+        el("a", { class: "btn", href: gmailLink(m), target: "_blank",
+                  rel: "noopener noreferrer", text: "Open in Gmail" }),
+        el("span", { class: "hint",
+          text: "Replying happens in Gmail — this is a reader, not a client." })));
+
+    // A push that has not landed is worth saying out loud: the edit is real
+    // locally and Gmail has not accepted it yet.
+    const stuck = m.push_error
+      ? el("div", { class: "mail-stuck", text: `Not sent to Gmail yet: ${m.push_error}` })
+      : null;
 
     return el("article", {
       class: "mail-row" + (m.is_unread ? " is-unread" : "")
-           + (score <= 1 ? " is-quiet" : ""),
-    }, rank, el("div", { class: "mail-body" }, head, subject, snippet, why, grade),
+           + (score <= 1 ? " is-quiet" : "") + (isOpen ? " is-open" : ""),
+    }, rank,
+       el("div", { class: "mail-body" },
+         el("button", { class: "mail-hit", type: "button",
+           "aria-expanded": isOpen ? "true" : "false",
+           onclick: () => openRow(m) },
+           head, subject, isOpen ? null : snippet),
+         why, stuck, expanded, grade),
        actions);
   }
 

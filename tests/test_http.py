@@ -1191,3 +1191,88 @@ def test_calendar_needs_a_session(live):
     status, _, _ = call(live, "GET",
                         "/api/view/calendar?from=2026-09-01&to=2026-09-30")
     assert status == 401
+
+
+# ── reading a message ─────────────────────────────────────────────────────
+def test_a_message_body_is_fetched_then_served_from_cache(live, tmp_path,
+                                                          monkeypatch):
+    from dashboard import crypt, feeds, google_api
+    from dashboard import storage as st
+    acct = _google_account(tmp_path, monkeypatch)
+    conn = st.connect()
+    feeds.upsert_messages(conn, acct, [
+        {"source_uid": "m1", "received_at": "2026-09-01T09:00:00",
+         "subject": "Hello", "thread_id": "t1"}])
+    mid = conn.execute("SELECT id FROM messages").fetchone()[0]
+    conn.close()
+
+    calls = []
+    monkeypatch.setattr(google_api, "fetch_body",
+                        lambda c, a, u: calls.append(u) or "the text")
+
+    cookie, _ = login(live)
+    status, _, body = call(live, "GET", f"/api/view/message/{mid}",
+                           headers={"Cookie": cookie})
+    assert status == 200 and body["body"] == "the text" and body["cached"] is False
+
+    _, _, again = call(live, "GET", f"/api/view/message/{mid}",
+                       headers={"Cookie": cookie})
+    assert again["cached"] is True
+    assert calls == ["m1"], "Gmail was asked twice for the same body"
+    crypt.reset_for_tests()
+
+
+def test_an_unknown_message_body_is_404(live):
+    cookie, _ = login(live)
+    status, _, _ = call(live, "GET", "/api/view/message/" + "0" * 32,
+                        headers={"Cookie": cookie})
+    assert status == 404
+
+
+def test_a_message_body_needs_a_session(live):
+    status, _, _ = call(live, "GET", "/api/view/message/" + "0" * 32)
+    assert status == 401
+
+
+def test_a_gmail_failure_is_reported_not_swallowed(live, tmp_path, monkeypatch):
+    from dashboard import crypt, feeds, google_api
+    from dashboard import storage as st
+    acct = _google_account(tmp_path, monkeypatch)
+    conn = st.connect()
+    feeds.upsert_messages(conn, acct, [
+        {"source_uid": "m2", "received_at": "2026-09-01T09:00:00"}])
+    mid = conn.execute("SELECT id FROM messages").fetchone()[0]
+    conn.close()
+
+    def boom(*a, **k):
+        raise google_api.GoogleError("Gmail said no")
+    monkeypatch.setattr(google_api, "fetch_body", boom)
+
+    cookie, _ = login(live)
+    status, _, body = call(live, "GET", f"/api/view/message/{mid}",
+                           headers={"Cookie": cookie})
+    assert status == 502 and "Gmail said no" in str(body)
+    crypt.reset_for_tests()
+
+
+def test_trash_and_spam_reach_the_editor(live, tmp_path, monkeypatch):
+    from dashboard import crypt, feeds
+    from dashboard import storage as st
+    acct = _google_account(tmp_path, monkeypatch)
+    conn = st.connect()
+    feeds.upsert_messages(conn, acct, [
+        {"source_uid": "m3", "received_at": "2026-09-01T09:00:00"}])
+    mid = conn.execute("SELECT id FROM messages").fetchone()[0]
+    conn.close()
+
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    status, _, body = call(live, "PATCH", f"/api/edit/message/{mid}",
+                           {"trashed": 1, "is_spam": 1}, headers=h)
+    assert status == 200 and set(body["updated"]) == {"trashed", "is_spam"}
+
+    conn = st.connect()
+    r = conn.execute("SELECT trashed, is_spam, dirty FROM messages").fetchone()
+    conn.close()
+    assert r["trashed"] == 1 and r["is_spam"] == 1 and r["dirty"] == 1
+    crypt.reset_for_tests()

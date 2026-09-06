@@ -23,6 +23,7 @@ from . import (
     crypt,
     feeds,
     firstrun,
+    google_api,
     security,
     settings,
     statements,
@@ -76,6 +77,8 @@ ROUTES = [
     ("agenda",   {"GET"},         re.compile(r"^/api/view/agenda$"),       "session"),
     ("calendar", {"GET"},         re.compile(r"^/api/view/calendar$"),     "session"),
     ("inbox",    {"GET"},         re.compile(r"^/api/view/inbox$"),        "session"),
+    ("msgbody",  {"GET"},
+     re.compile(r"^/api/view/message/([0-9a-f]{32})$"),                      "session"),
     ("syncst",   {"GET"},         re.compile(r"^/api/view/status$"),       "session"),
     ("editmsg",  {"PATCH"},
      re.compile(r"^/api/edit/message/([0-9a-f]{32})$"), "session"),
@@ -496,6 +499,18 @@ class Handler(BaseHTTPRequestHandler):
         """Per-source freshness, so a stale feed is visible rather than quiet."""
         self.json_out({"sources": feeds.sync_status(conn),
                        "accounts": settings.list_google_accounts(conn)})
+
+    def api_msgbody(self, conn, session, message_id):
+        """One message's text. Fetched from Gmail the first time, then kept."""
+        def fetch(account_id, source_uid):
+            return google_api.fetch_body(conn, account_id, source_uid)
+        try:
+            text, cached = feeds.message_body(conn, message_id, fetch)
+        except KeyError:
+            return self.fail(404, "no such message")
+        except google_api.GoogleError as e:
+            return self.fail(502, str(e))
+        self.json_out({"id": message_id, "body": text, "cached": cached})
 
     def api_editmsg(self, conn, session, message_id):
         data = self.body_json()

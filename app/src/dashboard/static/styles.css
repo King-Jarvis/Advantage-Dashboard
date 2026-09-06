@@ -923,3 +923,44 @@ a:hover { text-decoration: underline; }
   .mail-actions { grid-column: 2; justify-content: flex-end; }
   .mail-grade { opacity: 1; }
 }
+
+/* ── An opened message ─────────────────────────────────────────────────────
+ * The row stays in the list rather than becoming a screen of its own, so you
+ * keep your place. The body is preformatted text: it arrives already stripped
+ * of markup on the server, and its line breaks are the sender's own.
+ */
+.mail-hit {
+  display: block; width: 100%; text-align: left; background: none;
+  border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer;
+}
+.mail-row.is-open { background: var(--surface-2); }
+.mail-row.is-open.is-quiet { opacity: 1; }
+
+.mail-open { margin-top: 0.6rem; }
+.mail-text {
+  margin: 0; padding: 0.75rem 0.85rem;
+  background: var(--canvas); border: 1px solid var(--line); border-radius: 8px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.82rem; line-height: 1.55; color: var(--text);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  max-height: 32rem; overflow-y: auto;
+}
+.mail-open-foot {
+  display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap;
+  margin-top: 0.6rem;
+}
+.mail-open-foot .hint { font-size: 0.76rem; }
+
+/* An edit that has not reached Gmail. Stated plainly rather than left to be
+ * discovered when the two copies disagree. */
+.mail-stuck {
+  margin-top: 0.4rem; padding: 0.35rem 0.6rem; border-radius: 6px;
+  background: var(--warn-tint); color: var(--warn); font-size: 0.76rem;
+  border-left: 2px solid var(--warn);
+}
+
+.iconbtn.danger:hover { background: var(--danger-tint); color: var(--danger); }
+
+@media (max-width: 620px) {
+  .mail-text { font-size: 0.78rem; max-height: 22rem; }
+}

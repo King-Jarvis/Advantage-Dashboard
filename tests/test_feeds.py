@@ -254,3 +254,96 @@ def test_an_event_with_no_end_still_appears(conn, acct):
     feeds.upsert_events(conn, acct, [ev("open", "2026-09-15T09:00:00", ends_at="")])
     got = feeds.events_between(conn, "2026-09-01T00:00:00", "2026-09-30T23:59:59")
     assert [e["source_uid"] for e in got] == ["open"]
+
+
+# ── message bodies ────────────────────────────────────────────────────────
+def test_a_body_is_fetched_once_and_then_remembered(conn, acct):
+    """Gmail charges quota per request, and a body does not change."""
+    feeds.upsert_messages(conn, acct, [msg("m1", "2026-09-01T09:00:00")])
+    mid = conn.execute("SELECT id FROM messages").fetchone()[0]
+
+    calls = []
+
+    def fetch(account_id, source_uid):
+        calls.append(source_uid)
+        return "the body"
+
+    text, cached = feeds.message_body(conn, mid, fetch)
+    assert text == "the body" and cached is False
+    text, cached = feeds.message_body(conn, mid, fetch)
+    assert text == "the body" and cached is True
+    assert calls == ["m1"], "fetched twice"
+
+
+def test_an_empty_body_is_still_remembered(conn, acct):
+    """An attachment-only message has no text. Without recording that, every
+    view of it would hit Gmail again for the same nothing."""
+    feeds.upsert_messages(conn, acct, [msg("m2", "2026-09-01T09:00:00")])
+    mid = conn.execute("SELECT id FROM messages").fetchone()[0]
+    calls = []
+    feeds.message_body(conn, mid, lambda a, u: calls.append(u) or "")
+    feeds.message_body(conn, mid, lambda a, u: calls.append(u) or "")
+    assert len(calls) == 1
+
+
+def test_no_fetcher_means_no_network(conn, acct):
+    feeds.upsert_messages(conn, acct, [msg("m3", "2026-09-01T09:00:00")])
+    mid = conn.execute("SELECT id FROM messages").fetchone()[0]
+    assert feeds.message_body(conn, mid) == ("", False)
+
+
+def test_an_unknown_message_raises(conn):
+    with pytest.raises(KeyError):
+        feeds.message_body(conn, "0" * 32)
+
+
+def test_trash_and_spam_are_settable_and_mark_the_row_dirty(conn, acct):
+    feeds.upsert_messages(conn, acct, [msg("m4", "2026-09-01T09:00:00")])
+    mid = conn.execute("SELECT id FROM messages").fetchone()[0]
+    feeds.set_message(conn, mid, trashed=1)
+    r = conn.execute("SELECT trashed, dirty FROM messages").fetchone()
+    assert r["trashed"] == 1 and r["dirty"] == 1
+
+    conn.execute("UPDATE messages SET dirty=0")
+    feeds.set_message(conn, mid, is_spam=1)
+    r = conn.execute("SELECT is_spam, dirty FROM messages").fetchone()
+    assert r["is_spam"] == 1 and r["dirty"] == 1
+
+
+def test_an_importance_correction_does_not_mark_the_row_dirty(conn, acct):
+    """Google has no idea what importance means, so there is nothing to send
+    -- and a dirty flag would block Gmail's own updates until it cleared."""
+    feeds.upsert_messages(conn, acct, [msg("m5", "2026-09-01T09:00:00")])
+    mid = conn.execute("SELECT id FROM messages").fetchone()[0]
+    feeds.set_message(conn, mid, importance_override=5)
+    r = conn.execute("SELECT importance_override, dirty FROM messages").fetchone()
+    assert r["importance_override"] == 5 and r["dirty"] == 0
+
+
+def test_an_unknown_field_is_refused(conn, acct):
+    feeds.upsert_messages(conn, acct, [msg("m6", "2026-09-01T09:00:00")])
+    mid = conn.execute("SELECT id FROM messages").fetchone()[0]
+    with pytest.raises(ValueError, match="cannot set"):
+        feeds.set_message(conn, mid, body_text="injected")
+
+
+def test_the_inbox_listing_never_carries_bodies(conn, acct):
+    """m.* would ship up to 256 KB per message once bodies are cached, and
+    the list does not show one."""
+    feeds.upsert_messages(conn, acct, [msg("big", "2026-09-01T09:00:00")])
+    mid = conn.execute("SELECT id FROM messages").fetchone()[0]
+    conn.execute("UPDATE messages SET body_text=? WHERE id=?", ("x" * 5000, mid))
+    conn.commit()
+
+    rows = feeds.inbox(conn, min_importance=0)
+    assert "body_text" not in rows[0]
+    # But the list still knows whether one has been fetched.
+    assert rows[0]["has_body"] == 1
+
+
+def test_the_listing_carries_what_the_view_needs(conn, acct):
+    feeds.upsert_messages(conn, acct, [msg("m", "2026-09-01T09:00:00",
+                                           thread_id="t1")])
+    row = feeds.inbox(conn, min_importance=0)[0]
+    for field in ("thread_id", "trashed", "is_spam", "push_error", "score"):
+        assert field in row, field
