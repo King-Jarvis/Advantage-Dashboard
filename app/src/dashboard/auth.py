@@ -30,6 +30,11 @@ SESSION_ABSOLUTE_DAYS = 7
 MAX_FAILURES = 5
 LOCKOUT_SECONDS = 300
 
+# The floor for any password this application sets, wherever it is set from.
+# Kept here rather than at each call site so the browser setup form and the
+# command line cannot drift into disagreeing about what is acceptable.
+MIN_PASSWORD = 12
+
 
 def _now():
     return datetime.now(UTC).replace(microsecond=0)
@@ -80,6 +85,34 @@ def create_user(conn, username, password=None, google_sub=None):
         (uid, username, pw_hash, pw_salt, google_sub, _iso(_now())))
     conn.commit()
     return uid
+
+
+def set_password(conn, username, password):
+    """Replace a user's password. Returns True, or False if no such user.
+
+    Every session belonging to that user is destroyed. A password is reset
+    either because it was forgotten or because it was exposed, and in the
+    second case leaving the old sessions alive would mean the reset changed
+    nothing for whoever was already inside. Being signed out of your other
+    devices is the correct and expected cost.
+
+    The lockout is cleared too: locking someone out of an account they have
+    just proved they control, using a counter from before the reset, would be
+    punishing the wrong person.
+    """
+    if not isinstance(password, str) or len(password) < MIN_PASSWORD:
+        raise ValueError("password must be at least %d characters"
+                         % MIN_PASSWORD)
+    row = get_user(conn, username)
+    if row is None:
+        return False
+    pw_hash, pw_salt = hash_password(password)
+    conn.execute("UPDATE users SET pw_hash=?, pw_salt=?, failed_count=0,"
+                 " locked_until=NULL WHERE id=?",
+                 (pw_hash, pw_salt, row["id"]))
+    destroy_user_sessions(conn, row["id"])
+    conn.commit()
+    return True
 
 
 def get_user(conn, username):

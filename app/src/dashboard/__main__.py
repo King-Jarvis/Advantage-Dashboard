@@ -28,6 +28,11 @@ def main(argv=None):
                    help="print the code that claims an unclaimed install, "
                         "creating it if needed, and exit. Prints nothing and "
                         "exits 1 if an account already exists.")
+    p.add_argument("--set-password", metavar="USERNAME",
+                   help="replace a user's password and exit. The password is "
+                        "read from stdin so it never appears in the process "
+                        "list or your shell history. Signs that user out "
+                        "everywhere.")
     p.add_argument("--create-user", metavar="USERNAME",
                    help="create a user and exit; the password is read from "
                         "stdin so it never appears in the process list")
@@ -46,6 +51,25 @@ def main(argv=None):
         if not token:
             return 1
         print(token)
+        return 0
+
+    if args.set_password:
+        password = sys.stdin.readline().rstrip("\n")
+        if not password:
+            p.error("no password on stdin")
+        try:
+            ok = auth.set_password(conn, args.set_password, password)
+        except ValueError as e:
+            p.error(str(e))
+        if not ok:
+            # Naming the users is fine here: reaching this prompt already
+            # means shell access to the machine holding the database.
+            names = [r["username"] for r in
+                     conn.execute("SELECT username FROM users ORDER BY username")]
+            p.error("no user %r. Existing: %s"
+                    % (args.set_password, ", ".join(names) or "(none)"))
+        print("password changed for %s; that user's sessions were ended"
+              % args.set_password)
         return 0
 
     if args.create_user:

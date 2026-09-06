@@ -22,7 +22,7 @@ from . import auth, security, storage
 
 TOKEN_FILE = "setup-token"
 TOKEN_BYTES = 32
-MIN_PASSWORD = 12
+MIN_PASSWORD = auth.MIN_PASSWORD
 
 # Two browsers submitting the form at the same moment must not both succeed.
 _claim_lock = threading.Lock()

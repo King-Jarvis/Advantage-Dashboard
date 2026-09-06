@@ -135,3 +135,61 @@ def test_purge_removes_only_expired(conn):
     conn.commit()
     assert auth.purge_expired(conn) == 1
     assert auth.get_session(conn, live) is not None
+
+
+# ── resetting a password ──────────────────────────────────────────────────
+def test_set_password_replaces_the_old_one(conn):
+    auth.create_user(conn, "king", "hunter2hunter2")
+    assert auth.set_password(conn, "king", "a-brand-new-password") is True
+    assert auth.login(conn, "king", "hunter2hunter2") is None
+    assert auth.login(conn, "king", "a-brand-new-password") is not None
+
+
+def test_a_reset_signs_that_user_out_everywhere(conn):
+    """A password is reset because it was forgotten or because it leaked. In
+    the second case, leaving the old sessions alive changes nothing for
+    whoever was already inside."""
+    auth.create_user(conn, "king", "hunter2hunter2")
+    sid, _ = auth.login(conn, "king", "hunter2hunter2")
+    assert auth.get_session(conn, sid) is not None
+    auth.set_password(conn, "king", "a-brand-new-password")
+    assert auth.get_session(conn, sid) is None, "an old session outlived the reset"
+
+
+def test_a_reset_does_not_touch_another_user(conn):
+    auth.create_user(conn, "king", "hunter2hunter2")
+    auth.create_user(conn, "other", "another-password")
+    keep, _ = auth.login(conn, "other", "another-password")
+    auth.set_password(conn, "king", "a-brand-new-password")
+    assert auth.get_session(conn, keep) is not None
+    assert auth.login(conn, "other", "another-password") is not None
+
+
+def test_a_reset_clears_the_lockout(conn):
+    """Locking someone out using a counter from before the reset would punish
+    the wrong person."""
+    auth.create_user(conn, "king", "hunter2hunter2")
+    for _ in range(auth.MAX_FAILURES + 1):
+        auth.login(conn, "king", "wrong")
+    assert auth.is_locked(auth.get_user(conn, "king"))
+    auth.set_password(conn, "king", "a-brand-new-password")
+    row = auth.get_user(conn, "king")
+    assert not auth.is_locked(row) and row["failed_count"] == 0
+    assert auth.login(conn, "king", "a-brand-new-password") is not None
+
+
+def test_a_short_password_is_refused(conn):
+    auth.create_user(conn, "king", "hunter2hunter2")
+    with pytest.raises(ValueError, match="at least"):
+        auth.set_password(conn, "king", "short")
+    # The old password must still work -- a rejected reset changes nothing.
+    assert auth.login(conn, "king", "hunter2hunter2") is not None
+
+
+def test_an_unknown_user_reports_rather_than_raising(conn):
+    assert auth.set_password(conn, "nobody", "a-long-enough-password") is False
+
+
+def test_the_cli_and_the_setup_form_agree_on_the_floor(conn):
+    from dashboard import firstrun
+    assert firstrun.MIN_PASSWORD == auth.MIN_PASSWORD
