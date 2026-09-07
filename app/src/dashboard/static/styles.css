@@ -1053,7 +1053,10 @@ a:hover { text-decoration: underline; }
   font-size: 0.86rem; padding-bottom: 0.55rem; cursor: pointer;
   white-space: nowrap;
 }
-.check { width: 1.05em; height: 1.05em; accent-color: var(--brand); }
+/* Scoped to the input. Unscoped, this also hit the label that wraps a
+ * checkbox -- which uses the same class for its flex layout -- and squashed
+ * the whole label to one em wide. */
+input.check { width: 1.05em; height: 1.05em; accent-color: var(--brand); flex: none; }
 .ev-buttons { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.2rem; }
 .ev-buttons .btn.danger { margin-left: auto; }
 
@@ -1285,3 +1288,35 @@ textarea.input { resize: vertical; min-height: 5.5rem; line-height: 1.45; }
 }
 .addacct .row { align-items: center; }
 .addacct .input[type="text"] { min-width: 12rem; flex: 1 1 12rem; }
+
+/* Adding a category: a small form, laid out as fields. It was one row of
+ * unlabelled boxes, two of which are not guessable from a placeholder. */
+.addgrid {
+  display: grid; gap: var(--s3) var(--s4);
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  align-items: start;
+}
+.addgrid .field { display: grid; gap: 0.25rem; }
+.addgrid .field .hint { line-height: 1.35; }
+.addform .addbtns { margin-top: var(--s3); }
+.addform .check { width: auto; height: auto; }
+
+/* A legend for the row controls. Collapsed, because it is needed once and
+ * then never again -- but present, because a title attribute is invisible on
+ * the device this is actually used on. */
+.legend { margin-top: var(--s4); border-top: 1px solid var(--line); padding-top: var(--s3); }
+.legend summary {
+  cursor: pointer; color: var(--text-2); font-size: var(--t-label);
+  padding: 0.35em 0; list-style-position: outside;
+}
+.legend summary:hover { color: var(--text); }
+.legend dl {
+  margin: var(--s2) 0 0; display: grid; gap: 0.15rem var(--s4);
+  grid-template-columns: max-content 1fr; align-items: baseline;
+}
+.legend dt { color: var(--text); font-weight: 600; font-size: 0.86rem; }
+.legend dd { margin: 0 0 0.45rem; color: var(--text-3); font-size: 0.84rem; line-height: 1.45; }
+@media (max-width: 620px) {
+  .legend dl { grid-template-columns: 1fr; gap: 0.1rem; }
+  .legend dd { margin-bottom: 0.7rem; }
+}

@@ -85,7 +85,30 @@ function header(onMonth, refresh) {
         moneyEl(tbb, "hero"),
         el("span", { class: `pill ${tone}`, text: says })),
       state.error ? el("div", { class: "error", text: state.error }) : null,
-      state.adding ? addCategoryForm(refresh) : null));
+      state.adding ? addCategoryForm(refresh) : null,
+      // What the row controls do, said once rather than hidden in tooltips --
+      // a title attribute shows nothing at all on a touch screen, which is
+      // where this is read.
+      el("details", { class: "legend" },
+        el("summary", { text: "What the buttons do" }),
+        el("dl", {},
+          el("dt", { text: "The amount box" }),
+          el("dd", { text: "How much you are giving this category this month. "
+            + "Type over it and press Enter." }),
+          el("dt", { text: "Cover" }),
+          el("dd", { text: "Appears when a category is overspent. Adds exactly "
+            + "enough to bring it back to zero, taken from what is left to "
+            + "budget." }),
+          el("dt", { text: "Move" }),
+          el("dd", { text: "Take money out of this category. Press it, then "
+            + "press Move here on the category it should go to, and say how "
+            + "much." }),
+          el("dt", { text: "The category name" }),
+          el("dd", { text: "Opens it, to show this month's transactions and "
+            + "what the history suggests." }),
+          el("dt", { text: "\u2039 and \u203a" }),
+          el("dd", { text: "Previous and next month. Budgets are per month; "
+            + "what you set in one does not follow you into the next." })))));
 }
 
 /* ── adding a category ──────────────────────────────────────────────────── */
@@ -129,17 +152,34 @@ function addCategoryForm(refresh) {
     }
   }
 
+  // Fields with labels rather than one long row of unexplained boxes. Two of
+  // these are not obvious from their placeholder, and a category is a thing
+  // you make once and live with.
+  const field = (label, control, note) => el("div", { class: "field" },
+    el("span", { class: "label", text: label }), control,
+    note ? el("span", { class: "hint", text: note }) : null);
+
   return el("div", { class: "addform" },
-    el("div", { class: "row wrap" },
-      name, group, newGroup,
-      el("label", { class: "check" }, carry,
-        el("span", { text: "carry an overspend forward" })),
-      el("button", { class: "btn primary", type: "button", text: "Add",
+    el("div", { class: "addgrid" },
+      field("Name", name, "What you will call it: Groceries, Fuel, Rent."),
+      field("Group", group, "Which heading it sits under."),
+      field("Or a new group", newGroup,
+            "Leave empty to use the group chosen above."),
+      el("div", { class: "field" },
+        el("span", { class: "label", text: "Overspending" }),
+        el("label", { class: "check" }, carry,
+          el("span", { text: "Carry it into next month" })),
+        el("span", { class: "hint",
+          text: "On: an overspend follows the category, so it has to be "
+              + "made up here. Off: it comes out of next month's total. "
+              + "Rent on, Groceries usually off." }))),
+    el("div", { class: "row wrap addbtns" },
+      el("button", { class: "btn primary", type: "button", text: "Add category",
                      onclick: submit }),
       el("button", { class: "btn ghost", type: "button", text: "Cancel",
                      onclick: () => { state.adding = false; state.error = ""; refresh(true); } })),
     el("div", { class: "hint",
-      text: "New categories are available to the importer's classifier straight away." }));
+      text: "The importer's classifier can use a new category immediately." }));
 }
 
 /* ── one category ───────────────────────────────────────────────────────── */
