@@ -1354,3 +1354,98 @@ def test_images_can_be_turned_off(live, tmp_path, monkeypatch):
     # The address is not handed to the browser either, so nothing can load it.
     assert "cdn.example.com" not in json.dumps(body)
     crypt.reset_for_tests()
+
+
+# ── editing the calendar ──────────────────────────────────────────────────
+def test_creating_an_event_over_http(live, tmp_path, monkeypatch):
+    from dashboard import crypt
+    _google_account(tmp_path, monkeypatch)
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+
+    status, _, body = call(live, "POST", "/api/edit/event", {
+        "title": "Dentist", "starts_at": "2026-09-15T14:00:00-05:00",
+        "location": "Hill St"}, headers=h)
+    assert status == 200 and body["pending"] is True
+
+    _, _, cal = call(live, "GET",
+                     "/api/view/calendar?from=2026-09-01&to=2026-09-30",
+                     headers={"Cookie": cookie})
+    ev = cal["events"][0]
+    assert ev["title"] == "Dentist" and ev["location"] == "Hill St"
+    assert ev["starts_at"] == "2026-09-15T19:00:00", "offset not converted"
+    assert ev["dirty"] == 1, "a new event should be waiting to be sent"
+    crypt.reset_for_tests()
+
+
+def test_editing_and_deleting_an_event(live, tmp_path, monkeypatch):
+    from dashboard import crypt
+    _google_account(tmp_path, monkeypatch)
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+
+    _, _, made = call(live, "POST", "/api/edit/event",
+                      {"title": "Old", "starts_at": "2026-09-15T14:00:00"},
+                      headers=h)
+    eid = made["id"]
+
+    status, _, _ = call(live, "PATCH", f"/api/edit/event/{eid}",
+                        {"title": "New"}, headers=h)
+    assert status == 200
+    _, _, cal = call(live, "GET",
+                     "/api/view/calendar?from=2026-09-01&to=2026-09-30",
+                     headers={"Cookie": cookie})
+    assert cal["events"][0]["title"] == "New"
+
+    status, _, _ = call(live, "DELETE", f"/api/edit/event/{eid}", headers=h)
+    assert status == 200
+    # It leaves the grid at once, even though Google has not been told yet.
+    _, _, cal = call(live, "GET",
+                     "/api/view/calendar?from=2026-09-01&to=2026-09-30",
+                     headers={"Cookie": cookie})
+    assert cal["events"] == []
+    crypt.reset_for_tests()
+
+
+def test_an_invalid_event_is_refused(live, tmp_path, monkeypatch):
+    from dashboard import crypt
+    _google_account(tmp_path, monkeypatch)
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    status, _, body = call(live, "POST", "/api/edit/event", {
+        "title": "x", "starts_at": "2026-09-15T14:00:00",
+        "ends_at": "2026-09-15T13:00:00"}, headers=h)
+    assert status == 400 and "end before it starts" in str(body)
+    crypt.reset_for_tests()
+
+
+def test_editing_an_unknown_event_is_404(live):
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    status, _, _ = call(live, "PATCH", "/api/edit/event/" + "0" * 32,
+                        {"title": "x"}, headers=h)
+    assert status == 404
+
+
+def test_event_editing_needs_a_session(live):
+    status, _, _ = call(live, "POST", "/api/edit/event", {"title": "x"})
+    assert status == 401
+
+
+def test_the_account_is_required_when_there_are_several(live, tmp_path,
+                                                        monkeypatch):
+    """With one account it can be inferred; with two, guessing would put the
+    event in the wrong calendar."""
+    from dashboard import crypt, settings
+    from dashboard import storage as st
+    _google_account(tmp_path, monkeypatch)
+    conn = st.connect()
+    settings.save_google_account(conn, "sub-2", "b@example.com",
+                                 "FAKE-REFRESH-2", "FAKE-ACCESS-2", None, "s")
+    conn.close()
+    cookie, csrf = login(live)
+    status, _, body = call(live, "POST", "/api/edit/event",
+                           {"title": "x", "starts_at": "2026-09-15T14:00:00"},
+                           headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+    assert status == 400 and "account_id" in str(body)
+    crypt.reset_for_tests()

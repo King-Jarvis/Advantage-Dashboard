@@ -77,6 +77,9 @@ ROUTES = [
     ("home",     {"GET"},         re.compile(r"^/api/view/home$"),         "session"),
     ("agenda",   {"GET"},         re.compile(r"^/api/view/agenda$"),       "session"),
     ("calendar", {"GET"},         re.compile(r"^/api/view/calendar$"),     "session"),
+    ("evnew",    {"POST"},        re.compile(r"^/api/edit/event$"),        "session"),
+    ("evedit",   {"PATCH", "DELETE"},
+     re.compile(r"^/api/edit/event/([0-9a-f]{32})$"),                       "session"),
     ("inbox",    {"GET"},         re.compile(r"^/api/view/inbox$"),        "session"),
     # Signed, so this can never become an open proxy on the home network.
     ("image",    {"GET"},         re.compile(r"^/api/image$"),             "session"),
@@ -475,6 +478,38 @@ class Handler(BaseHTTPRequestHandler):
         days = self._int_arg("days", 7, 1, 90)
         self.json_out({"days": days,
                        "events": feeds.agenda(conn, days=days, limit=200)})
+
+    def _event_fields(self, data):
+        return {k: v for k, v in data.items() if k in feeds.EVENT_FIELDS}
+
+    def api_evnew(self, conn, session):
+        data = self.body_json()
+        account = str(data.get("account_id") or "")
+        if not account:
+            # With one account this could be guessed, but guessing would put
+            # the event in the wrong calendar the day a second one is added.
+            accounts = settings.list_google_accounts(conn)
+            if len(accounts) != 1:
+                raise ValueError("account_id is required")
+            account = accounts[0]["id"]
+        try:
+            eid = feeds.create_event(conn, account, **self._event_fields(data))
+        except KeyError:
+            return self.fail(404, "no such account")
+        self.json_out({"id": eid, "pending": True})
+
+    def api_evedit(self, conn, session, event_id):
+        if self.command == "DELETE":
+            try:
+                feeds.delete_event(conn, event_id)
+            except KeyError:
+                return self.fail(404, "no such event")
+            return self.json_out({"id": event_id, "deleting": True})
+        try:
+            feeds.update_event(conn, event_id, **self._event_fields(self.body_json()))
+        except KeyError:
+            return self.fail(404, "no such event")
+        self.json_out({"id": event_id, "pending": True})
 
     def api_calendar(self, conn, session):
         """A month of events for the grid, addressed by month rather than by

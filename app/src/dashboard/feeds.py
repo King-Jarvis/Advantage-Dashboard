@@ -14,6 +14,8 @@ import json
 import time
 import uuid
 
+from . import times
+
 
 def _now():
     return time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -79,7 +81,7 @@ def agenda(conn, days=7, limit=100, now=None):
     rows = conn.execute(
         "SELECT e.*, g.email account_email FROM events e"
         " JOIN google_accounts g ON g.id = e.account_id"
-        " WHERE e.deleted=0 AND e.status <> 'cancelled'"
+        " WHERE e.deleted=0 AND e.pending_delete=0 AND e.status <> 'cancelled'"
         "   AND COALESCE(e.ends_at, e.starts_at) >= ?"
         "   AND e.starts_at <= ?"
         " ORDER BY e.starts_at LIMIT ?", (now, horizon, limit)).fetchall()
@@ -98,12 +100,114 @@ def events_between(conn, start, end, limit=500):
     rows = conn.execute(
         "SELECT e.*, g.email account_email FROM events e"
         " JOIN google_accounts g ON g.id = e.account_id"
-        " WHERE e.deleted=0 AND e.status <> 'cancelled'"
+        # pending_delete too: something you have just deleted should leave the
+        # grid at once, not linger until the next push confirms it.
+        " WHERE e.deleted=0 AND e.pending_delete=0 AND e.status <> 'cancelled'"
         "   AND e.starts_at <= ?"
         "   AND COALESCE(NULLIF(e.ends_at,''), e.starts_at) >= ?"
         " ORDER BY e.starts_at LIMIT ?",
         (end, start, limit)).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── editing events ────────────────────────────────────────────────────────
+EVENT_FIELDS = {"title", "description", "location", "starts_at", "ends_at",
+                "all_day"}
+
+
+def _event_times(starts_at, ends_at, all_day):
+    """Normalise a pair of times, or say why they cannot be used.
+
+    Google treats an all-day end as exclusive -- a one-day event ends on the
+    following midnight. Storing it inclusively would paint an extra cell on
+    the grid and send Google a different day than the one shown.
+    """
+    start = times.to_utc(starts_at)
+    if not times.parse(start):
+        raise ValueError("a start time is required")
+    end = times.to_utc(ends_at) if ends_at else ""
+    if not end:
+        end = times.plus(start, days=1) if all_day else times.plus(start, hours=1)
+    if times.parse(end) < times.parse(start):
+        raise ValueError("an event cannot end before it starts")
+    if all_day:
+        start = start[:10] + "T00:00:00"
+        if end[:10] <= start[:10]:
+            end = times.plus(start, days=1)
+    return start, end
+
+
+def create_event(conn, account_id, **fields):
+    """A new event, local until a push gives it a provider id.
+
+    The placeholder id is what lets several unsent events coexist: the table's
+    uniqueness is on (account, source_uid), so they cannot all be ''.
+    """
+    bad = set(fields) - EVENT_FIELDS
+    if bad:
+        raise ValueError("cannot set: " + ", ".join(sorted(bad)))
+    if conn.execute("SELECT 1 FROM google_accounts WHERE id=?",
+                    (account_id,)).fetchone() is None:
+        raise KeyError(account_id)
+
+    all_day = 1 if fields.get("all_day") else 0
+    start, end = _event_times(fields.get("starts_at"), fields.get("ends_at"),
+                              all_day)
+    eid = uuid.uuid4().hex
+    conn.execute(
+        "INSERT INTO events (id, account_id, source_uid, title, description,"
+        " location, starts_at, ends_at, all_day, status, updated_at, dirty)"
+        " VALUES (?,?,?,?,?,?,?,?,?,'confirmed',?,1)",
+        (eid, account_id, "local:" + uuid.uuid4().hex,
+         str(fields.get("title") or "").strip()[:500],
+         str(fields.get("description") or "")[:5000],
+         str(fields.get("location") or "")[:500],
+         start, end, all_day, _now()))
+    conn.commit()
+    return eid
+
+
+def update_event(conn, event_id, **fields):
+    bad = set(fields) - EVENT_FIELDS
+    if bad:
+        raise ValueError("cannot set: " + ", ".join(sorted(bad)))
+    row = conn.execute("SELECT * FROM events WHERE id=? AND deleted=0",
+                       (event_id,)).fetchone()
+    if row is None:
+        raise KeyError(event_id)
+
+    merged = {k: row[k] for k in EVENT_FIELDS}
+    merged.update({k: v for k, v in fields.items() if v is not None})
+    all_day = 1 if merged.get("all_day") else 0
+    # Times are re-derived from the merged state, not the patch: changing only
+    # all_day has to re-shape the times it did not mention.
+    start, end = _event_times(merged.get("starts_at"), merged.get("ends_at"),
+                              all_day)
+    conn.execute(
+        "UPDATE events SET title=?, description=?, location=?, starts_at=?,"
+        " ends_at=?, all_day=?, updated_at=?, dirty=1, push_error=''"
+        " WHERE id=?",
+        (str(merged.get("title") or "").strip()[:500],
+         str(merged.get("description") or "")[:5000],
+         str(merged.get("location") or "")[:500],
+         start, end, all_day, _now(), event_id))
+    conn.commit()
+    return event_id
+
+
+def delete_event(conn, event_id):
+    """Mark it for deletion. The row survives until Google has been told.
+
+    Deleting the row outright would work locally and leave the event in the
+    calendar for ever, which is the same silent divergence the push path
+    exists to prevent.
+    """
+    row = conn.execute("SELECT id FROM events WHERE id=?", (event_id,)).fetchone()
+    if row is None:
+        raise KeyError(event_id)
+    conn.execute("UPDATE events SET pending_delete=1, dirty=1, push_error=''"
+                 " WHERE id=?", (event_id,))
+    conn.commit()
 
 
 # ── mail ──────────────────────────────────────────────────────────────────

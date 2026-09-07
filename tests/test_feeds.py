@@ -347,3 +347,112 @@ def test_the_listing_carries_what_the_view_needs(conn, acct):
     row = feeds.inbox(conn, min_importance=0)[0]
     for field in ("thread_id", "trashed", "is_spam", "push_error", "score"):
         assert field in row, field
+
+
+# ── editing events ────────────────────────────────────────────────────────
+def test_a_new_event_is_local_and_pending(conn, acct):
+    eid = feeds.create_event(conn, acct, title="Dentist",
+                             starts_at="2026-09-15T14:00:00")
+    r = conn.execute("SELECT * FROM events WHERE id=?", (eid,)).fetchone()
+    assert r["dirty"] == 1
+    assert r["source_uid"].startswith("local:")
+    assert r["ends_at"] == "2026-09-15T15:00:00", "no default duration"
+
+
+def test_several_unsent_events_can_coexist(conn, acct):
+    """Uniqueness is on (account, source_uid), so they cannot all be ''."""
+    a = feeds.create_event(conn, acct, title="One", starts_at="2026-09-15T09:00:00")
+    b = feeds.create_event(conn, acct, title="Two", starts_at="2026-09-15T10:00:00")
+    uids = [r[0] for r in conn.execute("SELECT source_uid FROM events")]
+    assert a != b and len(set(uids)) == 2
+
+
+def test_an_offset_is_converted_to_utc(conn, acct):
+    """The browser sends local time; the table holds UTC."""
+    eid = feeds.create_event(conn, acct, title="Call",
+                             starts_at="2026-09-15T14:00:00-05:00")
+    r = conn.execute("SELECT starts_at FROM events WHERE id=?", (eid,)).fetchone()
+    assert r["starts_at"] == "2026-09-15T19:00:00"
+
+
+def test_an_all_day_event_ends_on_the_next_midnight(conn, acct):
+    """Google's end is exclusive. Storing it inclusively paints an extra cell
+    and sends a different day than the one shown."""
+    eid = feeds.create_event(conn, acct, title="Holiday", all_day=True,
+                             starts_at="2026-09-15T00:00:00")
+    r = conn.execute("SELECT starts_at, ends_at FROM events WHERE id=?",
+                     (eid,)).fetchone()
+    assert r["starts_at"] == "2026-09-15T00:00:00"
+    assert r["ends_at"] == "2026-09-16T00:00:00"
+
+
+def test_an_end_before_the_start_is_refused(conn, acct):
+    with pytest.raises(ValueError, match="end before it starts"):
+        feeds.create_event(conn, acct, title="x",
+                           starts_at="2026-09-15T14:00:00",
+                           ends_at="2026-09-15T13:00:00")
+
+
+def test_a_missing_start_is_refused(conn, acct):
+    with pytest.raises(ValueError, match="start time"):
+        feeds.create_event(conn, acct, title="x")
+
+
+def test_an_unknown_account_is_refused(conn):
+    with pytest.raises(KeyError):
+        feeds.create_event(conn, "0" * 32, title="x",
+                           starts_at="2026-09-15T14:00:00")
+
+
+def test_an_unknown_event_field_is_refused(conn, acct):
+    with pytest.raises(ValueError, match="cannot set"):
+        feeds.create_event(conn, acct, starts_at="2026-09-15T14:00:00",
+                           source_uid="injected")
+
+
+def test_editing_marks_it_pending_again(conn, acct):
+    eid = feeds.create_event(conn, acct, title="Old",
+                             starts_at="2026-09-15T14:00:00")
+    conn.execute("UPDATE events SET dirty=0, push_error='boom' WHERE id=?", (eid,))
+    feeds.update_event(conn, eid, title="New")
+    r = conn.execute("SELECT title, dirty, push_error FROM events").fetchone()
+    assert r["title"] == "New" and r["dirty"] == 1 and r["push_error"] == ""
+
+
+def test_switching_to_all_day_reshapes_times_it_did_not_mention(conn, acct):
+    """Times are re-derived from the merged state, not the patch."""
+    eid = feeds.create_event(conn, acct, title="x",
+                             starts_at="2026-09-15T14:00:00")
+    feeds.update_event(conn, eid, all_day=True)
+    r = conn.execute("SELECT starts_at, ends_at FROM events").fetchone()
+    assert r["starts_at"].endswith("T00:00:00")
+    assert r["ends_at"] == "2026-09-16T00:00:00"
+
+
+def test_a_partial_edit_keeps_the_rest(conn, acct):
+    eid = feeds.create_event(conn, acct, title="Keep", location="Hill St",
+                             starts_at="2026-09-15T14:00:00")
+    feeds.update_event(conn, eid, title="Changed")
+    r = conn.execute("SELECT title, location, starts_at FROM events").fetchone()
+    assert r["title"] == "Changed" and r["location"] == "Hill St"
+    assert r["starts_at"] == "2026-09-15T14:00:00"
+
+
+def test_deleting_keeps_the_row_until_google_is_told(conn, acct):
+    """Removing it outright would work locally and leave the event in the
+    calendar for ever."""
+    eid = feeds.create_event(conn, acct, title="x",
+                             starts_at="2026-09-15T14:00:00")
+    feeds.delete_event(conn, eid)
+    r = conn.execute("SELECT pending_delete, dirty FROM events").fetchone()
+    assert r["pending_delete"] == 1 and r["dirty"] == 1
+
+
+def test_a_deleted_event_leaves_the_grid_at_once(conn, acct):
+    eid = feeds.create_event(conn, acct, title="Gone",
+                             starts_at="2026-09-15T14:00:00")
+    assert len(feeds.events_between(conn, "2026-09-01T00:00:00",
+                                    "2026-09-30T23:59:59")) == 1
+    feeds.delete_event(conn, eid)
+    assert feeds.events_between(conn, "2026-09-01T00:00:00",
+                                "2026-09-30T23:59:59") == []

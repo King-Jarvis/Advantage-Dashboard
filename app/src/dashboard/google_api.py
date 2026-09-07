@@ -19,7 +19,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from . import auth_google, crypt, mailparts, mailtext, settings
+from . import auth_google, crypt, mailparts, mailtext, settings, times
 
 CAL_URL = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
 GMAIL_LIST = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
@@ -225,22 +225,10 @@ def _get_retrying(conn, account_id, url, params=None):
 
 
 # ── time ──────────────────────────────────────────────────────────────────
-def _to_utc(value):
-    """RFC 3339 with any offset -> naive ISO 8601 in UTC.
-
-    The database stores UTC throughout. Mixing offsets into that column would
-    make ordering by starts_at silently wrong for anyone who travels.
-    """
-    if not value:
-        return ""
-    text = str(value).strip().replace("Z", "+00:00")
-    try:
-        dt = _dt.datetime.fromisoformat(text)
-    except ValueError:
-        return text[:19]
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(_dt.UTC).replace(tzinfo=None)
-    return dt.strftime("%Y-%m-%dT%H:%M:%S")
+# Kept in times.py: the event writer needs exactly the same conversion, and
+# two copies is how two parts of one application disagree about when
+# something happens.
+_to_utc = times.to_utc
 
 
 # ── calendar ──────────────────────────────────────────────────────────────

@@ -1008,3 +1008,43 @@ a:hover { text-decoration: underline; }
 @media (max-width: 620px) {
   .mail-rich { max-height: 26rem; font-size: 0.84rem; padding: 0.7rem; }
 }
+
+/* ── The event editor ──────────────────────────────────────────────────────
+ * One form for making and for changing, because they are the same fields and
+ * two forms drift apart.
+ */
+.cal-day-head .btn { margin-left: auto; }
+
+.ev-form { display: grid; gap: 0.7rem; margin-top: 0.3rem; }
+.ev-row {
+  display: grid; grid-template-columns: minmax(9rem, 1fr) auto;
+  gap: 0.9rem; align-items: end;
+}
+.ev-times { display: grid; grid-template-columns: 1fr 1fr; gap: 0.9rem; }
+.ev-times[hidden] { display: none; }
+.ev-allday {
+  display: flex; align-items: center; gap: 0.45em; color: var(--text-2);
+  font-size: 0.86rem; padding-bottom: 0.55rem; cursor: pointer;
+  white-space: nowrap;
+}
+.check { width: 1.05em; height: 1.05em; accent-color: var(--brand); }
+.ev-buttons { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.2rem; }
+.ev-buttons .btn.danger { margin-left: auto; }
+
+/* An event is a button now, so it has to stop looking like one. */
+.cal-what {
+  background: none; border: 0; padding: 0; font: inherit; color: inherit;
+  text-align: left; cursor: pointer; min-width: 0; width: 100%;
+  border-radius: 6px;
+}
+.cal-what:hover .cal-title-row { color: var(--brand); }
+
+.ev-pending {
+  margin-top: 0.2rem; font-size: 0.72rem; color: var(--warn);
+}
+
+@media (max-width: 620px) {
+  .ev-row { grid-template-columns: 1fr; align-items: stretch; }
+  .ev-allday { padding-bottom: 0; }
+  .ev-buttons .btn.danger { margin-left: 0; }
+}
