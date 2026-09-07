@@ -178,29 +178,99 @@ def suggest(conn, payees, use_model=None):
         "SELECT id, name FROM categories WHERE is_income=0 AND hidden=0")}
     by_name = {n.lower(): i for i, n in cats.items()}
 
-    out, unknown = {}, []
+    # Group by normalised name first. Twenty-two rows reading AMAZON.COM*1234,
+    # AMAZON MKTPL and so on are one decision, not twenty-two: it is the same
+    # merchant, the answer cannot differ, and asking again costs a lookup or a
+    # token for nothing.
+    by_norm = {}
     for raw in payees:
-        norm = norm_payee(raw)
+        by_norm.setdefault(norm_payee(raw), []).append(raw)
+
+    out, unknown = {}, []
+    for norm, raws in by_norm.items():
         cid, why = from_history(conn, norm)
         if not cid:
             cid, why = from_similar(conn, norm)
         if cid and cid in cats:
-            out[raw] = (cid, why)
+            # Applied to every spelling of the merchant, not just one of them.
+            for raw in raws:
+                out[raw] = (cid, why)
         else:
-            unknown.append(raw)
+            unknown.append(norm)
 
     if use_model is None:
         use_model = os.environ.get("ENABLE_LLM_CATEGORIES", "").lower() == "true"
     if unknown and use_model and cats:
-        norm_map = {norm_payee(r): r for r in unknown}
-        answers = _ask_model(sorted(norm_map), sorted(cats.values()))
+        answers = _ask_model(sorted(unknown), sorted(cats.values()))
         for norm, name in answers.items():
-            raw = norm_map.get(norm)
             cid = by_name.get(name.lower())
-            if raw and cid:
+            if not cid:
+                continue
+            for raw in by_norm.get(norm, ()):
                 out[raw] = (cid, "suggested by model")
 
     return out
+
+
+def plan(conn, payees, use_model=None):
+    """suggest(), plus a count of how each answer was reached.
+
+    Worth returning: the difference between "settled from what you already
+    told me" and "asked a model" is the difference between free and not, and
+    it is the only way to see whether the cheap paths are doing their job.
+    """
+    by_norm = {}
+    for raw in payees:
+        by_norm.setdefault(norm_payee(raw), []).append(raw)
+    mapping = suggest(conn, payees, use_model=use_model)
+
+    counts = {"history": 0, "similar": 0, "model": 0, "unresolved": 0}
+    for raws in by_norm.values():
+        hit = mapping.get(raws[0])
+        if not hit:
+            counts["unresolved"] += 1
+        elif hit[1] == "suggested by model":
+            counts["model"] += 1
+        elif "similar" in (hit[1] or ""):
+            counts["similar"] += 1
+        else:
+            counts["history"] += 1
+    counts["merchants"] = len(by_norm)
+    counts["rows"] = len(payees)
+    # One request per MAX_PAYEES_PER_CALL merchants, and none at all when the
+    # cheap paths settled everything.
+    counts["model_calls"] = -(-counts["model"] // MAX_PAYEES_PER_CALL) \
+        if counts["model"] else 0
+    return mapping, counts
+
+
+def apply_everywhere(conn, use_model=None):
+    """Categorise every uncategorised transaction in the ledger.
+
+    Separate from apply_to_batch, which only ever saw one import. Rows that
+    arrived before a category existed, or before a key was set, are otherwise
+    stranded with nothing that will ever look at them again.
+    """
+    rows = conn.execute(
+        "SELECT id, payee FROM transactions"
+        " WHERE category_id IS NULL AND payee <> ''"
+        "   AND transfer_id IS NULL AND parent_id IS NULL").fetchall()
+    if not rows:
+        return {"changed": 0, "rows": 0, "merchants": 0, "history": 0,
+                "similar": 0, "model": 0, "unresolved": 0, "model_calls": 0}
+
+    mapping, counts = plan(conn, [r["payee"] for r in rows],
+                           use_model=use_model)
+    changed = 0
+    for r in rows:
+        hit = mapping.get(r["payee"])
+        if hit:
+            conn.execute("UPDATE transactions SET category_id=? WHERE id=?",
+                         (hit[0], r["id"]))
+            changed += 1
+    conn.commit()
+    counts["changed"] = changed
+    return counts
 
 
 def apply_to_batch(conn, batch_id, use_model=None):

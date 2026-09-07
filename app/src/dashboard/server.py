@@ -74,6 +74,7 @@ ROUTES = [
     ("setting",  {"DELETE"},
      re.compile(r"^/api/settings/([a-z_]{3,40})$"), "session"),
     ("accounts", {"GET", "POST"}, re.compile(r"^/api/accounts$"),          "session"),
+    ("catall",   {"POST"},        re.compile(r"^/api/categorize$"),        "session"),
     ("budget",   {"GET"},         re.compile(r"^/api/view/budget$"),       "session"),
     ("suggest",  {"GET"},         re.compile(r"^/api/view/suggestions$"),  "session"),
     ("overview", {"GET"},         re.compile(r"^/api/view/overview$"),     "session"),
@@ -451,6 +452,22 @@ class Handler(BaseHTTPRequestHandler):
                                     type=str(data.get("type", "checking")),
                                     on_budget=bool(data.get("on_budget", True)))
         self.json_out({"id": aid}, 201)
+
+    def api_catall(self, conn, session):
+        """Categorise everything still uncategorised.
+
+        Reports how each answer was reached, because the difference between
+        "settled from what you already told me" and "asked a model" is the
+        difference between free and not.
+        """
+        from . import categorize
+        data = self.body_json()
+        want_model = bool(data.get("use_model", True))
+        has_key = categorize.available()
+        counts = categorize.apply_everywhere(
+            conn, use_model=want_model and has_key)
+        counts["model_available"] = has_key
+        self.json_out(counts)
 
     def _month(self):
         month = (self.query().get("month") or [""])[0]

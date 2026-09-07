@@ -197,6 +197,37 @@ export async function importView(container, { onDone } = {}) {
                        onclick: addAccount })));
   }
 
+  async function categoriseAll() {
+    state.busy = true; state.error = ""; state.note = "";
+    render();
+    try {
+      const r = await post("/api/categorize", { use_model: true });
+      if (r.rows === 0) {
+        state.note = "Nothing left to categorise.";
+      } else {
+        // Say what it cost, not only what it did: the point of grouping by
+        // merchant is that a hundred rows is not a hundred questions.
+        const bits = [`${r.changed} of ${r.rows} rows`,
+                      `${r.merchants} distinct merchants`];
+        if (r.history) bits.push(`${r.history} from what you set before`);
+        if (r.similar) bits.push(`${r.similar} by resemblance`);
+        if (r.model) {
+          bits.push(`${r.model} asked in ${r.model_calls} request`
+                    + (r.model_calls === 1 ? "" : "s"));
+        }
+        if (r.unresolved) {
+          bits.push(`${r.unresolved} still unmatched`
+                    + (r.model_available ? "" : " — no API key set"));
+        }
+        state.note = bits.join(" \u00b7 ");
+      }
+    } catch (e) {
+      state.error = (e && e.message) || "Could not categorise.";
+    }
+    state.busy = false;
+    return importView(container, { onDone });
+  }
+
   function addToggle() {
     if (firstOne()) return null;
     return el("button", {
@@ -253,6 +284,9 @@ export async function importView(container, { onDone } = {}) {
                              text: state.busy ? "Reading…" : "Read file",
                              onclick: doUpload }),
               // Pushed to the far end, away from the thing you came to do.
+              el("button", { class: "btn", type: "button",
+                text: state.busy ? "Working\u2026" : "Categorise everything",
+                onclick: categoriseAll }),
               el("div", { class: "spacer" }), addToggle())
           : null,
         addRow(),

@@ -169,3 +169,85 @@ def test_a_new_category_is_available_to_the_classifier_at_once(conn, book):
                            "BLUE BOTTLE ROASTERS", coffee)
     out = categorize.suggest(conn, ["BLUE BOTTLE ROASTERS"], use_model=False)
     assert out["BLUE BOTTLE ROASTERS"][0] == coffee
+
+
+# ── one decision per merchant ─────────────────────────────────────────────
+def test_every_spelling_of_a_merchant_gets_the_answer(conn, book, monkeypatch):
+    """The bug this replaces: the answer was applied to one raw payee and the
+    other twenty-one rows for the same shop stayed uncategorised."""
+    asked = []
+
+    def fake(payees, names, model=None, timeout=None):
+        asked.append(list(payees))
+        return {p: "Groceries" for p in payees}
+
+    monkeypatch.setattr(categorize, "_ask_model", fake)
+    raws = ["TESCO METRO 44712", "TESCO METRO 98311", "Tesco Metro 10233"]
+    out = categorize.suggest(conn, raws, use_model=True)
+    assert set(out) == set(raws), "some spellings were left out"
+    assert len({v[0] for v in out.values()}) == 1
+
+
+def test_a_merchant_is_asked_about_once(conn, book, monkeypatch):
+    """Twenty-two rows is one question. This is the whole saving."""
+    asked = []
+
+    def fake(payees, names, model=None, timeout=None):
+        asked.append(list(payees))
+        return {}
+
+    monkeypatch.setattr(categorize, "_ask_model", fake)
+    categorize.suggest(conn, ["TESCO METRO 44712"] * 12
+                       + ["Tesco  Metro   98311"] * 10, use_model=True)
+    assert len(asked) == 1
+    assert len(asked[0]) == 1, "asked more than once about one merchant"
+
+
+def test_nothing_is_asked_when_history_settles_it(conn, book, monkeypatch):
+    """A model call that could have been a lookup is money spent for nothing."""
+    called = []
+    monkeypatch.setattr(categorize, "_ask_model",
+                        lambda *a, **k: called.append(1) or {})
+    seen(conn, book, "Tesco Metro", "groceries")
+    out = categorize.suggest(conn, ["TESCO METRO 4471"], use_model=True)
+    assert called == [], "asked the model something history already knew"
+    assert out
+
+
+def test_the_plan_counts_how_each_answer_was_reached(conn, book, monkeypatch):
+    monkeypatch.setattr(categorize, "_ask_model", lambda *a, **k: {})
+    seen(conn, book, "Tesco Metro", "groceries")
+    _, counts = categorize.plan(
+        conn, ["TESCO METRO 4471", "TESCO METRO 88231", "NEW SHOP LTD"],
+        use_model=True)
+    assert counts["rows"] == 3
+    assert counts["merchants"] == 2, "duplicates were counted as work"
+    assert counts["history"] == 1
+    assert counts["unresolved"] == 1
+
+
+def test_requests_are_counted_in_batches(conn, book, monkeypatch):
+    monkeypatch.setattr(categorize, "_ask_model", lambda *a, **k: {})
+    many = ["SHOP %d LTD" % i for i in range(categorize.MAX_PAYEES_PER_CALL + 5)]
+    _, counts = categorize.plan(conn, many, use_model=True)
+    assert counts["model_calls"] == 0, "nothing was answered, so nothing was sent"
+
+
+def test_apply_everywhere_reaches_rows_no_batch_owns(conn, book, monkeypatch):
+    """Rows imported before a category existed are otherwise stranded: nothing
+    ever looks at them again."""
+    monkeypatch.setattr(categorize, "_ask_model", lambda *a, **k: {})
+    seen(conn, book, "Tesco Metro", "groceries")
+    for i in range(4):
+        ledger.add_transaction(conn, book["acct"], "2026-08-0%d" % (i + 2),
+                               -900, payee="TESCO METRO 4471%d" % i)
+    got = categorize.apply_everywhere(conn, use_model=False)
+    assert got["changed"] == 4
+    left = conn.execute("SELECT COUNT(*) FROM transactions"
+                        " WHERE category_id IS NULL").fetchone()[0]
+    assert left == 0
+
+
+def test_apply_everywhere_on_an_empty_ledger_is_harmless(conn, book):
+    got = categorize.apply_everywhere(conn, use_model=False)
+    assert got["changed"] == 0 and got["rows"] == 0
