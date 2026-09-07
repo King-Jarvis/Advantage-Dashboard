@@ -11,7 +11,7 @@ operation is not optional.
 
 import json
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Foreign keys are off by default in SQLite and must be enabled per
 # connection, not once per database. Enforced in storage.connect().
@@ -360,6 +360,15 @@ ADDED_COLUMNS = [
     ("events", "push_error", "TEXT NOT NULL DEFAULT ''"),
     ("events", "pending_delete", "INTEGER NOT NULL DEFAULT 0"),
     ("events", "etag", "TEXT NOT NULL DEFAULT ''"),
+    # RFC 5545 RRULE, exactly as Google stores it, and the reminder in
+    # minutes before the start. -1 means "whatever the calendar's default is",
+    # which is not the same as no reminder at all.
+    ("events", "recurrence", "TEXT NOT NULL DEFAULT ''"),
+    ("events", "reminder_minutes", "INTEGER NOT NULL DEFAULT -1"),
+    # Set when this row is one instance of a repeating series. The rule itself
+    # lives on the series, which we never fetch, so this is how we know a
+    # thing repeats without pretending to know how.
+    ("events", "series_id", "TEXT NOT NULL DEFAULT ''"),
 ]
 
 

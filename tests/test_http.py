@@ -1519,3 +1519,57 @@ def test_the_catalog_says_which_theme_is_worn(live):
     _, _, again = call(live, "GET", "/api/themes", headers={"Cookie": cookie})
     assert again["active"] == builtin["id"]
     assert next(t for t in again["themes"] if t["id"] == builtin["id"])["active"]
+
+
+def test_creating_an_event_names_a_calendar(live, tmp_path, monkeypatch):
+    """The bug this fixes: the form never sent one, and with two accounts
+    connected every attempt was refused."""
+    from dashboard import crypt, settings
+    from dashboard import storage as st
+    _google_account(tmp_path, monkeypatch)
+    conn = st.connect()
+    settings.save_google_account(conn, "sub-2", "b@example.com",
+                                 "FAKE-REFRESH-2", "FAKE-ACCESS-2", None, "s")
+    conn.close()
+
+    cookie, csrf = login(live)
+    # The grid hands the form the list, so it can name one.
+    _, _, cal = call(live, "GET",
+                     "/api/view/calendar?from=2026-09-01&to=2026-09-30",
+                     headers={"Cookie": cookie})
+    assert len(cal["accounts"]) == 2
+    assert all("email" in a and "id" in a for a in cal["accounts"])
+
+    status, _, body = call(live, "POST", "/api/edit/event", {
+        "title": "Dentist", "starts_at": "2026-09-15T14:00:00",
+        "account_id": cal["accounts"][0]["id"]},
+        headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+    assert status == 200, body
+    crypt.reset_for_tests()
+
+
+def test_the_calendar_payload_carries_the_option_lists(live, tmp_path,
+                                                       monkeypatch):
+    """The form must not invent its own repeat values: they are validated
+    server-side against exactly this list."""
+    from dashboard import crypt, feeds
+    _google_account(tmp_path, monkeypatch)
+    cookie, _ = login(live)
+    _, _, cal = call(live, "GET",
+                     "/api/view/calendar?from=2026-09-01&to=2026-09-30",
+                     headers={"Cookie": cookie})
+    assert set(cal["repeats"]) == set(feeds.REPEATS)
+    assert set(cal["reminders"]) == set(feeds.REMINDERS)
+    crypt.reset_for_tests()
+
+
+def test_a_repeat_the_form_did_not_offer_is_refused(live, tmp_path, monkeypatch):
+    from dashboard import crypt
+    _google_account(tmp_path, monkeypatch)
+    cookie, csrf = login(live)
+    status, _, body = call(live, "POST", "/api/edit/event", {
+        "title": "x", "starts_at": "2026-09-15T14:00:00",
+        "recurrence": "RRULE:FREQ=SECONDLY"},
+        headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+    assert status == 400
+    crypt.reset_for_tests()

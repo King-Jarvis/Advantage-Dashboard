@@ -55,19 +55,26 @@ def upsert_events(conn, account_id, events):
             str(e.get("location", ""))[:500], starts,
             e.get("ends_at"), 1 if e.get("all_day") else 0,
             str(e.get("status", "confirmed"))[:40], _now(),
-            1 if e.get("deleted") else 0)
+            1 if e.get("deleted") else 0,
+            str(e.get("etag", ""))[:120],
+            str(e.get("recurrence", ""))[:300],
+            int(e.get("reminder_minutes", -1) or -1),
+            str(e.get("series_id", ""))[:200])
         if row:
             conn.execute(
                 "UPDATE events SET calendar_id=?, title=?, description=?,"
                 " location=?, starts_at=?, ends_at=?, all_day=?, status=?,"
-                " updated_at=?, deleted=? WHERE id=?",
+                " updated_at=?, deleted=?, etag=?, recurrence=?,"
+                " reminder_minutes=?, series_id=? WHERE id=?",
                 (*values[2:], row["id"]))
         else:
             conn.execute(
                 "INSERT INTO events (id, account_id, source_uid, calendar_id,"
                 " title, description, location, starts_at, ends_at, all_day,"
-                " status, updated_at, deleted)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", (_id(), *values))
+                " status, updated_at, deleted, etag, recurrence,"
+                " reminder_minutes, series_id)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (_id(), *values))
         written += 1
     conn.commit()
     return written, skipped
@@ -119,7 +126,57 @@ def events_between(conn, start, end, limit=500):
 
 # ── editing events ────────────────────────────────────────────────────────
 EVENT_FIELDS = {"title", "description", "location", "starts_at", "ends_at",
-                "all_day"}
+                "all_day", "recurrence", "reminder_minutes"}
+
+# What the form offers. Written out rather than accepting arbitrary RRULE from
+# the browser: a rule is pushed straight to Google, and the set of things
+# worth offering is small and knowable.
+REPEATS = {
+    "": "",
+    "daily": "RRULE:FREQ=DAILY",
+    "weekdays": "RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR",
+    "weekly": "RRULE:FREQ=WEEKLY",
+    "fortnightly": "RRULE:FREQ=WEEKLY;INTERVAL=2",
+    "monthly": "RRULE:FREQ=MONTHLY",
+    "yearly": "RRULE:FREQ=YEARLY",
+}
+
+# Minutes before the start. -1 is the calendar's own default, which is a real
+# choice and not an absent one.
+REMINDERS = (-1, 0, 5, 10, 15, 30, 60, 120, 1440, 2880)
+
+
+def _recurrence(value, stored=False):
+    """A repeat rule.
+
+    From a caller, only the named options are accepted: a rule goes straight
+    into someone's real calendar, and the set worth offering is small enough
+    to list. `stored` is for a rule already in the row -- Google's own rules
+    are far richer than the list, and re-validating one on an unrelated edit
+    would destroy it. The two paths are separate because letting the second
+    serve the first is exactly how arbitrary input gets in.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text in REPEATS:
+        return REPEATS[text]
+    if stored and text.startswith("RRULE:") and len(text) < 300 \
+            and "\n" not in text:
+        return text
+    raise ValueError("that repeat is not one of the options")
+
+
+def _reminder(value):
+    if value in (None, ""):
+        return -1
+    try:
+        minutes = int(value)
+    except (TypeError, ValueError):
+        raise ValueError("a reminder is a number of minutes") from None
+    if minutes not in REMINDERS:
+        raise ValueError("that reminder is not one of the options")
+    return minutes
 
 
 def _event_times(starts_at, ends_at, all_day):
@@ -163,13 +220,16 @@ def create_event(conn, account_id, **fields):
     eid = uuid.uuid4().hex
     conn.execute(
         "INSERT INTO events (id, account_id, source_uid, title, description,"
-        " location, starts_at, ends_at, all_day, status, updated_at, dirty)"
-        " VALUES (?,?,?,?,?,?,?,?,?,'confirmed',?,1)",
+        " location, starts_at, ends_at, all_day, status, updated_at, dirty,"
+        " recurrence, reminder_minutes)"
+        " VALUES (?,?,?,?,?,?,?,?,?,'confirmed',?,1,?,?)",
         (eid, account_id, "local:" + uuid.uuid4().hex,
          str(fields.get("title") or "").strip()[:500],
          str(fields.get("description") or "")[:5000],
          str(fields.get("location") or "")[:500],
-         start, end, all_day, _now()))
+         start, end, all_day, _now(),
+         _recurrence(fields.get("recurrence")),
+         _reminder(fields.get("reminder_minutes"))))
     conn.commit()
     return eid
 
@@ -185,6 +245,10 @@ def update_event(conn, event_id, **fields):
 
     merged = {k: row[k] for k in EVENT_FIELDS}
     merged.update({k: v for k, v in fields.items() if v is not None})
+    # Only a rule the caller actually sent is held to the offered list; one
+    # already on the row is Google's and survives untouched.
+    rule = _recurrence(merged.get("recurrence"),
+                       stored="recurrence" not in fields)
     all_day = 1 if merged.get("all_day") else 0
     # Times are re-derived from the merged state, not the patch: changing only
     # all_day has to re-shape the times it did not mention.
@@ -192,12 +256,13 @@ def update_event(conn, event_id, **fields):
                               all_day)
     conn.execute(
         "UPDATE events SET title=?, description=?, location=?, starts_at=?,"
-        " ends_at=?, all_day=?, updated_at=?, dirty=1, push_error=''"
-        " WHERE id=?",
+        " ends_at=?, all_day=?, updated_at=?, dirty=1, push_error='',"
+        " recurrence=?, reminder_minutes=? WHERE id=?",
         (str(merged.get("title") or "").strip()[:500],
          str(merged.get("description") or "")[:5000],
          str(merged.get("location") or "")[:500],
-         start, end, all_day, _now(), event_id))
+         start, end, all_day, _now(), rule,
+         _reminder(merged.get("reminder_minutes")), event_id))
     conn.commit()
     return event_id
 

@@ -131,6 +131,19 @@ def _get(url, token, params=None):
         raise GoogleError("could not reach Google: %s" % e.reason) from None
 
 
+def _reminder_of(item):
+    """The first popup override, or -1 for the calendar's own default."""
+    rem = item.get("reminders") or {}
+    if rem.get("useDefault", True):
+        return -1
+    for o in rem.get("overrides") or []:
+        try:
+            return int(o.get("minutes"))
+        except (TypeError, ValueError):
+            continue
+    return -1
+
+
 def _api_name(url):
     return "Calendar" if url.startswith(CAL_URL) else "Gmail"
 
@@ -316,6 +329,14 @@ def fetch_events(conn, account_id, days_back=DAYS_BACK, days_ahead=DAYS_AHEAD,
                 # for ever.
                 "deleted": 1 if item.get("status") == "cancelled" else 0,
                 "etag": str(item.get("etag") or ""),
+                # An expanded instance does not carry its series' rule, only
+                # the id of the series it belongs to. Inventing a rule here
+                # would put a fabricated RRULE into the table and fail
+                # validation the next time the event was edited.
+                "recurrence": (item.get("recurrence") or [""])[0]
+                              if item.get("recurrence") else "",
+                "series_id": str(item.get("recurringEventId") or ""),
+                "reminder_minutes": _reminder_of(item),
             })
         page = data.get("nextPageToken")
         if not page:

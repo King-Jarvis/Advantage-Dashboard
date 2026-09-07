@@ -15,6 +15,24 @@
 import { del, get, patch, post } from "./api.js";
 import { el, mount } from "./dom.js";
 
+const REPEAT_WORDS = {
+  "": "Does not repeat",
+  daily: "Every day",
+  weekdays: "Every weekday",
+  weekly: "Every week",
+  fortnightly: "Every two weeks",
+  monthly: "Every month",
+  yearly: "Every year",
+};
+
+function reminderWord(m) {
+  if (m === -1) return "Calendar default";
+  if (m === 0) return "At the time";
+  if (m < 60) return `${m} minutes before`;
+  if (m < 1440) return `${m / 60} hour${m === 60 ? "" : "s"} before`;
+  return `${m / 1440} day${m === 1440 ? "" : "s"} before`;
+}
+
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const MONTH = ["January", "February", "March", "April", "May", "June", "July",
                "August", "September", "October", "November", "December"];
@@ -76,6 +94,7 @@ export async function agendaView(root, state) {
   let selected = state.calDay ?? key(now);
   let byDay = new Map();
   let editing = null;           // null | {mode:'new'} | {mode:'edit', event}
+  let accounts = [];            // which calendars we can write to
 
   const grid = el("div", { class: "cal-grid" });
   const dayPanel = el("div", { class: "cal-day" });
@@ -110,7 +129,23 @@ export async function agendaView(root, state) {
       location: el("input", { class: "input", type: "text", id: "ev-loc",
                               value: existing ? existing.location || "" : "",
                               placeholder: "Where? (optional)" }),
+      account: el("select", { class: "input", id: "ev-acct" },
+        ...accounts.map((a) => el("option", { value: a.id, text: a.email }))),
+      repeat: el("select", { class: "input", id: "ev-repeat" },
+        ...Object.entries(REPEAT_WORDS).map(([v, label]) =>
+          el("option", { value: v, text: label }))),
+      remind: el("select", { class: "input", id: "ev-remind" },
+        ...[-1, 0, 10, 30, 60, 120, 1440, 2880].map((m) =>
+          el("option", { value: String(m), text: reminderWord(m) }))),
     };
+    if (existing) {
+      if (existing.account_id) f.account.value = existing.account_id;
+      f.remind.value = String(existing.reminder_minutes ?? -1);
+      // An expanded instance does not carry its series' rule, so the control
+      // would be lying if it claimed to know one. It is disabled instead,
+      // with the reason said out loud.
+      if (existing.series_id) f.repeat.disabled = true;
+    }
     if (existing && existing.all_day) f.allDay.checked = true;
 
     const timed = el("div", { class: "ev-times" },
@@ -136,7 +171,17 @@ export async function agendaView(root, state) {
         all_day: allDay,
         starts_at: localISO(f.date.value, allDay ? "00:00" : f.start.value),
         ends_at: allDay ? null : localISO(f.date.value, f.end.value),
+        reminder_minutes: Number(f.remind.value),
       };
+      if (!existing) {
+        // Required whenever there is more than one calendar, and harmless
+        // when there is one -- guessing would file it in the wrong place the
+        // day a second account is connected.
+        body.account_id = f.account.value;
+        body.recurrence = f.repeat.value;
+      } else if (!f.repeat.disabled) {
+        body.recurrence = f.repeat.value;
+      }
       if (!body.title) { err.textContent = "Give it a name."; f.title.focus(); return; }
       save.disabled = true;
       try {
@@ -178,6 +223,24 @@ export async function agendaView(root, state) {
       timed,
       el("div", { class: "field" },
         el("label", { class: "label", for: "ev-loc", text: "Location" }), f.location),
+      el("div", { class: "ev-times" },
+        el("div", { class: "field" },
+          el("label", { class: "label", for: "ev-repeat", text: "Repeats" }),
+          f.repeat,
+          existing && existing.series_id
+            ? el("div", { class: "hint",
+                text: "One of a repeating series. Change the repeat in "
+                    + "Google Calendar; edits here apply to this date only." })
+            : null),
+        el("div", { class: "field" },
+          el("label", { class: "label", for: "ev-remind", text: "Remind me" }),
+          f.remind)),
+      // Only worth asking when there is a choice to make.
+      accounts.length > 1 && !existing
+        ? el("div", { class: "field" },
+            el("label", { class: "label", for: "ev-acct", text: "Calendar" }),
+            f.account)
+        : null,
       buttons);
   }
 
@@ -286,6 +349,7 @@ export async function agendaView(root, state) {
     status.textContent = "Loading…";
     try {
       const r = await get(`/api/view/calendar?from=${key(start)}&to=${key(end)}`);
+      accounts = r.accounts || [];
       byDay = new Map();
       for (const e of r.events || []) {
         for (const k of spanDays(e)) {

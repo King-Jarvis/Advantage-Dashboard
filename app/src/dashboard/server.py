@@ -524,7 +524,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def api_calendar(self, conn, session):
         """A month of events for the grid, addressed by month rather than by
-        a day count -- the caller is drawing a calendar, not a horizon."""
+        a day count -- the caller is drawing a calendar, not a horizon.
+
+        The connected accounts come with it. The form has to name one when
+        there are several, and it cannot name what it has not been told.
+        """
         q = self.query()
         start = (q.get("from") or [""])[0][:10]
         end = (q.get("to") or [""])[0][:10]
@@ -532,6 +536,10 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("from and to are required, as YYYY-MM-DD")
         self.json_out({
             "from": start, "to": end,
+            "accounts": [{"id": a["id"], "email": a["email"]}
+                         for a in settings.list_google_accounts(conn)],
+            "repeats": sorted(feeds.REPEATS),
+            "reminders": list(feeds.REMINDERS),
             "events": feeds.events_between(conn, start + "T00:00:00",
                                            end + "T23:59:59")})
 

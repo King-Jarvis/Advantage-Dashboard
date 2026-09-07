@@ -270,3 +270,47 @@ def test_all_day_events_get_no_offset(conn, acct, calls):
     conn.execute("UPDATE events SET dirty=1 WHERE id=?", (eid,))
     push.run(conn)
     assert calls[0]["payload"]["start"] == {"date": "2026-09-10"}
+
+
+def test_a_repeat_is_sent_as_a_list(conn, acct, calls):
+    """Google's shape: a recurrence can carry EXDATE and RDATE alongside the
+    rule, so it is always a list."""
+    feeds.create_event(conn, acct, title="Standup",
+                       starts_at="2026-09-15T09:00:00", recurrence="weekly")
+    push.run(conn)
+    assert calls[0]["payload"]["recurrence"] == ["RRULE:FREQ=WEEKLY"]
+
+
+def test_a_repeating_event_is_not_left_behind_as_a_phantom(conn, acct, calls):
+    """Google keeps one series; we sync with singleEvents and get instances
+    with their own ids. Keeping the row we inserted would leave a duplicate
+    sitting at the series start."""
+    feeds.create_event(conn, acct, title="Standup",
+                       starts_at="2026-09-15T09:00:00", recurrence="weekly")
+    push.run(conn)
+    assert conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 0
+
+
+def test_a_one_off_event_keeps_its_row(conn, acct, calls):
+    eid = feeds.create_event(conn, acct, title="Dentist",
+                             starts_at="2026-09-15T09:00:00")
+    push.run(conn)
+    r = conn.execute("SELECT source_uid, dirty FROM events WHERE id=?",
+                     (eid,)).fetchone()
+    assert r["source_uid"] == "google-made-this" and r["dirty"] == 0
+
+
+def test_a_reminder_becomes_an_override(conn, acct, calls):
+    feeds.create_event(conn, acct, title="x", starts_at="2026-09-15T09:00:00",
+                       reminder_minutes=30)
+    push.run(conn)
+    rem = calls[0]["payload"]["reminders"]
+    assert rem["useDefault"] is False
+    assert rem["overrides"] == [{"method": "popup", "minutes": 30}]
+
+
+def test_the_default_reminder_is_sent_explicitly(conn, acct, calls):
+    """On a patch, sending nothing would leave a previous override in place."""
+    feeds.create_event(conn, acct, title="x", starts_at="2026-09-15T09:00:00")
+    push.run(conn)
+    assert calls[0]["payload"]["reminders"] == {"useDefault": True}

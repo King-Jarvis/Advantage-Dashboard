@@ -101,6 +101,23 @@ def event_payload(row):
         body["location"] = row["location"]
     if row["description"]:
         body["description"] = row["description"]
+
+    # Sent as a list because that is the shape Google uses -- a recurrence can
+    # carry EXDATE and RDATE lines alongside the rule.
+    rule = row["recurrence"] if "recurrence" in row.keys() else ""
+    if rule:
+        body["recurrence"] = [rule]
+
+    mins = row["reminder_minutes"] if "reminder_minutes" in row.keys() else -1
+    if mins is not None and mins >= 0:
+        body["reminders"] = {"useDefault": False,
+                             "overrides": [{"method": "popup",
+                                            "minutes": int(mins)}]}
+    elif mins == -1:
+        # Explicitly the calendar's own default, which is different from
+        # sending nothing on a patch -- nothing would leave a previous
+        # override in place.
+        body["reminders"] = {"useDefault": True}
     return body
 
 
@@ -132,6 +149,15 @@ def push_event(conn, account_id, row):
         if not new_uid:
             raise google_api.GoogleError("Google accepted the event but "
                                          "returned no id")
+        rule = row["recurrence"] if "recurrence" in row.keys() else ""
+        if rule:
+            # A repeating event is stored by Google as one series, and we sync
+            # with singleEvents so it comes back as separate instances with
+            # their own ids. Keeping this row would leave a phantom sitting at
+            # the series start alongside the real first instance. Drop it and
+            # let the next pull bring back what actually exists.
+            conn.execute("DELETE FROM events WHERE id=?", (row["id"],))
+            return
         conn.execute("UPDATE events SET source_uid=?, etag=? WHERE id=?",
                      (new_uid, str(got.get("etag") or ""), row["id"]))
         return

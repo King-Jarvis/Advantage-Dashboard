@@ -474,3 +474,74 @@ def test_a_tombstone_for_an_event_we_do_have_still_deletes_it(conn, acct):
     feeds.upsert_events(conn, acct, [ev("real", "2026-09-10T09:00:00", deleted=1)])
     assert feeds.events_between(conn, "2026-09-01T00:00:00",
                                 "2026-09-30T23:59:59") == []
+
+
+# ── repeats and reminders ─────────────────────────────────────────────────
+def test_a_repeat_becomes_a_real_rrule(conn, acct):
+    eid = feeds.create_event(conn, acct, title="Standup",
+                             starts_at="2026-09-15T09:00:00",
+                             recurrence="weekly")
+    r = conn.execute("SELECT recurrence FROM events WHERE id=?", (eid,)).fetchone()
+    assert r["recurrence"] == "RRULE:FREQ=WEEKLY"
+
+
+def test_an_arbitrary_rule_from_the_browser_is_refused(conn, acct):
+    """A rule is posted straight into someone's calendar. The set worth
+    offering is small and knowable, so it is a list rather than a parser."""
+    with pytest.raises(ValueError, match="not one of the options"):
+        feeds.create_event(conn, acct, title="x",
+                           starts_at="2026-09-15T09:00:00",
+                           recurrence="FREQ=SECONDLY;COUNT=999999")
+
+
+def test_a_rule_google_gave_us_round_trips(conn, acct):
+    """Editing an event Google created must not destroy its rule."""
+    eid = feeds.create_event(conn, acct, title="x",
+                             starts_at="2026-09-15T09:00:00")
+    conn.execute("UPDATE events SET recurrence=? WHERE id=?",
+                 ("RRULE:FREQ=MONTHLY;BYMONTHDAY=3", eid))
+    conn.commit()
+    feeds.update_event(conn, eid, title="renamed")
+    r = conn.execute("SELECT recurrence FROM events WHERE id=?", (eid,)).fetchone()
+    assert r["recurrence"] == "RRULE:FREQ=MONTHLY;BYMONTHDAY=3"
+
+
+def test_a_reminder_is_stored_in_minutes(conn, acct):
+    eid = feeds.create_event(conn, acct, title="x",
+                             starts_at="2026-09-15T09:00:00",
+                             reminder_minutes=30)
+    r = conn.execute("SELECT reminder_minutes FROM events WHERE id=?",
+                     (eid,)).fetchone()
+    assert r["reminder_minutes"] == 30
+
+
+def test_no_reminder_choice_means_the_calendar_default(conn, acct):
+    """-1 is a real choice and not an absent one."""
+    eid = feeds.create_event(conn, acct, title="x",
+                             starts_at="2026-09-15T09:00:00")
+    r = conn.execute("SELECT reminder_minutes FROM events WHERE id=?",
+                     (eid,)).fetchone()
+    assert r["reminder_minutes"] == -1
+
+
+def test_an_unlisted_reminder_is_refused(conn, acct):
+    with pytest.raises(ValueError, match="not one of the options"):
+        feeds.create_event(conn, acct, title="x",
+                           starts_at="2026-09-15T09:00:00",
+                           reminder_minutes=7)
+
+
+def test_a_raw_rule_cannot_be_posted_even_though_stored_ones_survive(conn, acct):
+    """The round-trip path must not become a way in. Google's rules are
+    richer than the list; a caller's are not allowed to be."""
+    with pytest.raises(ValueError, match="not one of the options"):
+        feeds.create_event(conn, acct, title="x",
+                           starts_at="2026-09-15T09:00:00",
+                           recurrence="RRULE:FREQ=SECONDLY")
+    eid = feeds.create_event(conn, acct, title="y",
+                             starts_at="2026-09-15T09:00:00")
+    conn.execute("UPDATE events SET recurrence='RRULE:FREQ=SECONDLY'"
+                 " WHERE id=?", (eid,))
+    conn.commit()
+    with pytest.raises(ValueError, match="not one of the options"):
+        feeds.update_event(conn, eid, recurrence="RRULE:FREQ=SECONDLY")
