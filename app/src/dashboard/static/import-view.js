@@ -17,7 +17,7 @@ const state = {
   addingAccount: false,
   unfiled: [], allCats: [], unfiledBand: "in", showFiled: false,
   tracking: [], transfers: [], candidates: [], history: [],
-  historyOpen: false,
+  historyOpen: false, transfersOpen: null,
 };
 
 function fmtRange(a, b) {
@@ -591,15 +591,29 @@ export async function importView(container, { onDone } = {}) {
 
     // Before coverage: unfiled rows are work waiting, and coverage is a
     // reference. Work first.
-    const xferCard = el("section", { class: "node", dataset: { kind: "budget" } },
-      el("header", { class: "node-head" },
-        el("span", { class: "node-title", text: "Transfers" }),
-        el("div", { class: "spacer" }),
-        el("span", { class: "label",
-          text: `${state.transfers.length} linked`
+    // Folded like the import history, with one difference: a suggested pair
+    // is work waiting, so it opens itself when there are any. A linked
+    // transfer is a record and stays put.
+    const xferDetails = el("details", { class: "impfold" },
+      el("summary", {},
+        el("span", { text: "Transfers" }),
+        el("span", { class: "hint",
+          text: ` · ${state.transfers.length} linked`
               + (state.candidates.length
-                 ? `, ${state.candidates.length} suggested` : "") })),
-      el("div", { class: "node-body" }, transfersPanel(refresh)));
+                 ? ` · ${state.candidates.length} to confirm` : "") })),
+      transfersPanel(refresh));
+    const wantOpen = state.transfersOpen === null
+      ? state.candidates.length > 0
+      : state.transfersOpen;
+    if (wantOpen) xferDetails.setAttribute("open", "");
+    xferDetails.addEventListener("toggle", () => {
+      // Once you have opened or closed it yourself, that decision stands --
+      // otherwise confirming the last pair would fold it shut mid-task.
+      state.transfersOpen = xferDetails.open;
+    });
+
+    const xferCard = el("section", { class: "node", dataset: { kind: "budget" } },
+      el("div", { class: "node-body" }, xferDetails));
 
     // Folded away: this is a record, not work waiting. It is opened when
     // something has gone in wrong, which is rare, and the rest of the time it
