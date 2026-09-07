@@ -378,6 +378,13 @@ def _blocks(raw):
 
 
 # ── sync bookkeeping ──────────────────────────────────────────────────────
+def sync_cursor(conn, source):
+    """Where this feed got to last time, or None to start from the beginning."""
+    row = conn.execute("SELECT cursor FROM sync_state WHERE source=?",
+                       (source,)).fetchone()
+    return (row["cursor"] or None) if row else None
+
+
 def note_sync(conn, source, status="ok", error="", cursor=None):
     now = _now()
     conn.execute(

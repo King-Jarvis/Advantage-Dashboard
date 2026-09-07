@@ -165,7 +165,7 @@ def test_cancelled_events_come_through_as_deleted(conn, acct, monkeypatch):
         {"id": "b", "summary": "Gone", "status": "cancelled",
          "start": {"dateTime": "2026-09-01T10:00:00Z"}, "end": {}},
     ])
-    out = google_api.fetch_events(conn, acct)
+    out, _ = google_api.fetch_events(conn, acct)
     assert [e["deleted"] for e in out] == [0, 1]
 
 
@@ -173,13 +173,13 @@ def test_all_day_flagged_and_untitled_named(conn, acct, monkeypatch):
     _cal(monkeypatch, [{"id": "c", "status": "confirmed",
                         "start": {"date": "2026-09-02"},
                         "end": {"date": "2026-09-03"}}])
-    e = google_api.fetch_events(conn, acct)[0]
+    e = google_api.fetch_events(conn, acct)[0][0]
     assert e["all_day"] == 1 and e["title"] == "(no title)"
 
 
 def test_event_without_a_start_is_skipped(conn, acct, monkeypatch):
     _cal(monkeypatch, [{"id": "d", "status": "confirmed", "start": {}, "end": {}}])
-    assert google_api.fetch_events(conn, acct) == []
+    assert google_api.fetch_events(conn, acct)[0] == []
 
 
 def test_fetched_events_satisfy_upsert(conn, acct, monkeypatch):
@@ -190,7 +190,7 @@ def test_fetched_events_satisfy_upsert(conn, acct, monkeypatch):
                         "location": "Hill St",
                         "start": {"dateTime": "2026-09-01T11:00:00+01:00"},
                         "end": {"dateTime": "2026-09-01T11:30:00+01:00"}}])
-    written, _ = feeds.upsert_events(conn, acct, google_api.fetch_events(conn, acct))
+    written, _ = feeds.upsert_events(conn, acct, google_api.fetch_events(conn, acct)[0])
     assert written == 1
     row = conn.execute("SELECT starts_at, location FROM events").fetchone()
     assert row["starts_at"] == "2026-09-01T10:00:00" and row["location"] == "Hill St"
@@ -292,7 +292,7 @@ def test_one_failing_account_does_not_stop_the_other(conn, acct, monkeypatch):
     def per_account(conn_, aid, **kw):
         if aid == acct:
             raise google_api.GoogleError("revoked")
-        return []
+        return [], None
 
     monkeypatch.setattr(google_api, "fetch_events", per_account)
     monkeypatch.setattr(google_api, "fetch_messages",
@@ -312,7 +312,7 @@ def test_one_failing_account_does_not_stop_the_other(conn, acct, monkeypatch):
 
 
 def test_all_succeeding_reports_ok(conn, acct, monkeypatch):
-    monkeypatch.setattr(google_api, "fetch_events", lambda *a, **k: [])
+    monkeypatch.setattr(google_api, "fetch_events", lambda *a, **k: ([], None))
     monkeypatch.setattr(google_api, "fetch_messages", lambda *a, **k: [])
     out = sync.run(conn)
     assert out["ok"] is True and len(out["results"]) == 1
@@ -326,7 +326,7 @@ def test_local_edits_are_reported_as_held(conn, acct, monkeypatch):
          "subject": "x"}])
     mid = conn.execute("SELECT id FROM messages").fetchone()[0]
     feeds.set_message(conn, mid, archived=1)
-    monkeypatch.setattr(google_api, "fetch_events", lambda *a, **k: [])
+    monkeypatch.setattr(google_api, "fetch_events", lambda *a, **k: ([], None))
     monkeypatch.setattr(google_api, "fetch_messages", lambda *a, **k: [
         {"source_uid": "m9", "received_at": "2026-09-01T10:00:00",
          "subject": "x"}])
@@ -491,3 +491,79 @@ def test_a_missing_encryption_key_is_not_reported_as_a_missing_token(
     monkeypatch.setattr(google_api.crypt, "available", lambda: False)
     with pytest.raises(google_api.GoogleError, match="encryption key"):
         google_api.access_token(conn, acct)
+
+
+# ── incremental calendar sync ─────────────────────────────────────────────
+def test_the_first_fetch_asks_for_a_window_and_keeps_the_token(conn, acct,
+                                                               monkeypatch):
+    seen = {}
+
+    def fake(conn_, aid, url, params=None):
+        seen.update(params or {})
+        return {"items": [], "nextSyncToken": "TOKEN-1"}
+
+    monkeypatch.setattr(google_api, "_get_retrying", fake)
+    events, cursor = google_api.fetch_events(conn, acct)
+    assert "timeMin" in seen and "timeMax" in seen
+    assert seen.get("singleEvents") == "true"
+    assert cursor == "TOKEN-1"
+
+
+def test_a_later_fetch_sends_the_token_and_no_window(conn, acct, monkeypatch):
+    """timeMin with a syncToken is an error at Google's end -- the window is
+    already baked into the token."""
+    seen = {}
+
+    def fake(conn_, aid, url, params=None):
+        seen.clear()
+        seen.update(params or {})
+        return {"items": [], "nextSyncToken": "TOKEN-2"}
+
+    monkeypatch.setattr(google_api, "_get_retrying", fake)
+    _, cursor = google_api.fetch_events(conn, acct, cursor="TOKEN-1")
+    assert seen.get("syncToken") == "TOKEN-1"
+    assert "timeMin" not in seen and "timeMax" not in seen
+    assert cursor == "TOKEN-2"
+
+
+def test_an_expired_token_starts_again_rather_than_failing(conn, acct,
+                                                           monkeypatch):
+    """410 means start again, not something went wrong."""
+    calls = []
+
+    def fake(conn_, aid, url, params=None):
+        calls.append(dict(params or {}))
+        if "syncToken" in params:
+            raise google_api.GoneError()
+        return {"items": [], "nextSyncToken": "FRESH"}
+
+    monkeypatch.setattr(google_api, "_get_retrying", fake)
+    _, cursor = google_api.fetch_events(conn, acct, cursor="STALE")
+    assert cursor == "FRESH"
+    assert len(calls) == 2 and "timeMin" in calls[1]
+
+
+def test_a_410_without_a_token_is_a_real_error(conn, acct, monkeypatch):
+    """Otherwise a genuine failure would loop for ever pretending to retry."""
+    def fake(conn_, aid, url, params=None):
+        raise google_api.GoneError()
+
+    monkeypatch.setattr(google_api, "_get_retrying", fake)
+    with pytest.raises(google_api.GoneError):
+        google_api.fetch_events(conn, acct)
+
+
+def test_the_window_covers_more_than_the_month_you_are_standing_in(conn, acct,
+                                                                   monkeypatch):
+    import datetime as dt
+    seen = {}
+
+    def fake(conn_, aid, url, params=None):
+        seen.update(params or {})
+        return {"items": []}
+
+    monkeypatch.setattr(google_api, "_get_retrying", fake)
+    google_api.fetch_events(conn, acct)
+    lo = dt.datetime.fromisoformat(seen["timeMin"])
+    hi = dt.datetime.fromisoformat(seen["timeMax"])
+    assert (hi - lo).days >= 300, "a calendar that shows one month is not one"

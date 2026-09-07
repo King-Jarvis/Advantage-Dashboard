@@ -29,7 +29,11 @@ HTTP_TIMEOUT = 20
 # A cap, not a target. A scheduled sync that quietly grows into a thousand
 # requests is how an API quota is exhausted at three in the morning.
 MAX_MESSAGES = 40
-MAX_EVENTS = 250
+# A year forward and a season back. Narrower than this and the calendar can
+# only show the month you are standing in, which is not a calendar.
+DAYS_BACK = 90
+DAYS_AHEAD = 365
+MAX_EVENTS = 2500
 REFRESH_MARGIN = 120        # refresh this many seconds before expiry
 
 
@@ -110,6 +114,8 @@ def _get(url, token, params=None):
     except urllib.error.HTTPError as e:
         if e.code == 401:
             raise _Unauthorized() from None
+        if e.code == 410:
+            raise GoneError() from None
         # Google's `reason` is a fixed enum, so it is safe to read and worth
         # translating. The human-readable `message` beside it is free text
         # that echoes the request back, so it is never surfaced.
@@ -163,6 +169,11 @@ def _explain(reason, url, code):
 
 class _Unauthorized(Exception):
     pass
+
+
+class GoneError(Exception):
+    """Google's sync token has expired. Means start again, not something
+    went wrong."""
 
 
 class Conflict(Exception):
@@ -240,27 +251,47 @@ _to_utc = times.to_utc
 
 
 # ── calendar ──────────────────────────────────────────────────────────────
-def fetch_events(conn, account_id, days_back=1, days_ahead=21):
-    """Events in a window around now, recurrences already expanded.
+def fetch_events(conn, account_id, days_back=DAYS_BACK, days_ahead=DAYS_AHEAD,
+                 cursor=None):
+    """Events in a window around now, and the token to fetch changes next time.
 
-    singleEvents asks Google to do the expansion. Doing it here would mean
-    reimplementing RRULE, which is a great deal of subtle work to arrive at a
-    worse answer.
+    Returns (events, next_cursor).
+
+    The first call asks for the whole window. Every call after that sends the
+    sync token Google handed back and receives only what changed -- which is
+    what makes a year-wide window affordable to poll every few minutes
+    instead of re-downloading a thousand events to discover that none of them
+    moved.
+
+    A token expires, and Google says so with 410. That is not an error worth
+    reporting: it means start again, so we do, once.
     """
-    now = _dt.datetime.now(_dt.UTC)
-    params = {
-        "timeMin": (now - _dt.timedelta(days=days_back)).isoformat(),
-        "timeMax": (now + _dt.timedelta(days=days_ahead)).isoformat(),
-        "singleEvents": "true",
-        "orderBy": "startTime",
-        "maxResults": 250,
-        "showDeleted": "true",
-    }
-    out, page = [], None
+    params = {"maxResults": 250, "showDeleted": "true"}
+    if cursor:
+        # timeMin and timeMax must not be sent with a sync token -- the window
+        # is already baked into it by the request that created it.
+        params["syncToken"] = cursor
+    else:
+        now = _dt.datetime.now(_dt.UTC)
+        params.update({
+            "timeMin": (now - _dt.timedelta(days=days_back)).isoformat(),
+            "timeMax": (now + _dt.timedelta(days=days_ahead)).isoformat(),
+            "singleEvents": "true",
+            "orderBy": "startTime",
+        })
+
+    out, page, next_cursor = [], None, None
     while len(out) < MAX_EVENTS:
         if page:
             params["pageToken"] = page
-        data = _get_retrying(conn, account_id, CAL_URL, params)
+        try:
+            data = _get_retrying(conn, account_id, CAL_URL, params)
+        except GoneError:
+            if not cursor:
+                raise
+            # The token aged out. Start again from a full window, once.
+            return fetch_events(conn, account_id, days_back, days_ahead, None)
+
         for item in data.get("items", []):
             start, end = item.get("start") or {}, item.get("end") or {}
             all_day = "date" in start
@@ -278,14 +309,17 @@ def fetch_events(conn, account_id, days_back=1, days_ahead=21):
                 "all_day": 1 if all_day else 0,
                 "status": item.get("status", "confirmed"),
                 # A cancelled event must come through as deleted rather than
-                # be dropped: dropping it leaves the old copy on the agenda
-                # forever, which is worse than never having synced it.
+                # be dropped: dropping it leaves the old copy on the calendar
+                # for ever.
                 "deleted": 1 if item.get("status") == "cancelled" else 0,
+                "etag": str(item.get("etag") or ""),
             })
         page = data.get("nextPageToken")
         if not page:
+            # Only the final page carries it.
+            next_cursor = data.get("nextSyncToken") or cursor
             break
-    return out[:MAX_EVENTS]
+    return out[:MAX_EVENTS], next_cursor
 
 
 # ── mail ──────────────────────────────────────────────────────────────────

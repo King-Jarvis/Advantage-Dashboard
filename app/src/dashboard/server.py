@@ -697,9 +697,10 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("body must be an object")
         account = str(data.get("account_id") or "") or None
         try:
-            days = max(1, min(90, int(data.get("days_ahead", 21))))
+            days = max(1, min(730, int(
+                data.get("days_ahead", google_api.DAYS_AHEAD))))
         except (TypeError, ValueError):
-            days = 21
+            days = google_api.DAYS_AHEAD
         result = sync.run(conn, account_id=account, days_ahead=days)
         # A partial failure is still a 200: the caller asked for a sync and
         # got one, and the body says exactly which account did not answer.

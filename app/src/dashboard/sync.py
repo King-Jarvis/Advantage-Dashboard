@@ -14,8 +14,14 @@ from . import feeds, google_api, push, settings
 
 def _one(conn, account, days_ahead, mail_query):
     aid = account["id"]
-    events = google_api.fetch_events(conn, aid, days_ahead=days_ahead)
+    # The cursor is per account: two calendars have two independent positions
+    # and sharing one would make each undo the other's progress.
+    source = "calendar:" + aid
+    cursor = feeds.sync_cursor(conn, source)
+    events, next_cursor = google_api.fetch_events(
+        conn, aid, days_ahead=days_ahead, cursor=cursor)
     ev_written, ev_skipped = feeds.upsert_events(conn, aid, events)
+    feeds.note_sync(conn, source, "ok", cursor=next_cursor)
     messages = google_api.fetch_messages(conn, aid, query=mail_query)
     ms_written, ms_skipped = feeds.upsert_messages(conn, aid, messages)
     settings.note_sync(conn, aid, "")
@@ -27,7 +33,7 @@ def _one(conn, account, days_ahead, mail_query):
     }
 
 
-def run(conn, account_id=None, days_ahead=21,
+def run(conn, account_id=None, days_ahead=google_api.DAYS_AHEAD,
         mail_query="-in:chats newer_than:14d"):
     """Sync every connected account, or just one.
 
