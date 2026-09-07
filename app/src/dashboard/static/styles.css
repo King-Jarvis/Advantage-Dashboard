@@ -1,3 +1,15 @@
+@font-face {
+  font-family: "Fraunces";
+  /* The variable axes are the point: SOFT rounds the terminals and WONK
+   * swaps in the odder letterforms. Both are used sparingly by the Painting
+   * theme -- the texture carries the hand-made feel, and the type stays
+   * legible at a glance, which is the thing that must not be traded away. */
+  src: url("/fonts/fraunces.woff2") format("woff2-variations");
+  font-weight: 300 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 /* Components.
  *
  * No inline styles anywhere: the content security policy has no
@@ -1155,3 +1167,84 @@ button, a { -webkit-tap-highlight-color: rgba(234, 75, 113, 0.18); }
 }
 .themebtns { gap: 0.4rem; }
 textarea.input { resize: vertical; min-height: 5.5rem; line-height: 1.45; }
+
+/* ── Painting ──────────────────────────────────────────────────────────────
+ * Only active while the Painting theme is worn. Everything colour-shaped is
+ * a token, set by the theme; what lives here is the texture and the edges,
+ * which are geometry rather than palette and so cannot be expressed as a
+ * token map.
+ *
+ * The metaphor: the ground is canvas, and each panel is a painting sitting on
+ * it -- lifted very slightly, so it reads as an object you are looking at
+ * rather than a box drawn on. Paintings are rectangular, which is what lets
+ * the text stay perfectly readable while the brushwork happens at the edges.
+ */
+[data-theme-base="light"] body,
+[data-theme-base="light"] .app {
+  background-color: var(--canvas);
+  background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22140%22%20height%3D%22140%22%3E%20%3Cfilter%20id%3D%22w%22%3E%3CfeTurbulence%20type%3D%22fractalNoise%22%20baseFrequency%3D%220.9%200.02%22%20numOctaves%3D%222%22%20seed%3D%227%22%2F%3E%20%3CfeColorMatrix%20type%3D%22saturate%22%20values%3D%220%22%2F%3E%3C%2Ffilter%3E%20%3Cfilter%20id%3D%22v%22%3E%3CfeTurbulence%20type%3D%22fractalNoise%22%20baseFrequency%3D%220.02%200.9%22%20numOctaves%3D%222%22%20seed%3D%223%22%2F%3E%20%3CfeColorMatrix%20type%3D%22saturate%22%20values%3D%220%22%2F%3E%3C%2Ffilter%3E%20%3Crect%20width%3D%22140%22%20height%3D%22140%22%20filter%3D%22url%28%23w%29%22%20opacity%3D%220.42%22%2F%3E%20%3Crect%20width%3D%22140%22%20height%3D%22140%22%20filter%3D%22url%28%23v%29%22%20opacity%3D%220.34%22%2F%3E%3C%2Fsvg%3E");
+  background-size: 140px 140px;
+}
+
+/* A second, finer grain inside each panel, so a widget looks painted rather
+ * than filled. Kept faint: texture under body copy is where painterly designs
+ * usually fail, and legibility wins every time it is a contest. */
+[data-theme-base="light"] .card,
+[data-theme-base="light"] .themecard,
+[data-theme-base="light"] .cal-day,
+[data-theme-base="light"] .mail-list,
+[data-theme-base="light"] .cal-grid,
+[data-theme-base="light"] .login {
+  background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2290%22%20height%3D%2290%22%3E%20%3Cfilter%20id%3D%22g%22%3E%3CfeTurbulence%20type%3D%22fractalNoise%22%20baseFrequency%3D%220.75%22%20numOctaves%3D%223%22%20seed%3D%2211%22%2F%3E%20%3CfeColorMatrix%20type%3D%22saturate%22%20values%3D%220%22%2F%3E%3C%2Ffilter%3E%20%3Crect%20width%3D%2290%22%20height%3D%2290%22%20filter%3D%22url%28%23g%29%22%20opacity%3D%220.28%22%2F%3E%3C%2Fsvg%3E");
+  background-size: 90px 90px;
+  box-shadow: var(--shadow);
+}
+
+/* The edges. Six variants so a wall of panels is not obviously stamped from
+ * one template -- assigned by position, because CSP forbids the inline style
+ * that a random rotation would need, and a fixed set stays composed anyway. */
+[data-theme-base="light"] .card { border-color: var(--line-lit); }
+[data-theme-base="light"] .card:nth-child(6n+1) { border-radius: 5px 3px 6px 2px; }
+[data-theme-base="light"] .card:nth-child(6n+2) { border-radius: 2px 6px 3px 5px; }
+[data-theme-base="light"] .card:nth-child(6n+3) { border-radius: 6px 2px 5px 3px; }
+[data-theme-base="light"] .card:nth-child(6n+4) { border-radius: 3px 5px 2px 6px; }
+[data-theme-base="light"] .card:nth-child(6n+5) { border-radius: 5px 6px 2px 3px; }
+[data-theme-base="light"] .card:nth-child(6n)   { border-radius: 6px 3px 5px 2px; }
+
+/* Headings get a dry-brush stroke rather than a rule: the one place the paint
+ * is allowed to be loose. */
+[data-theme-base="light"] .grouphead,
+[data-theme-base="light"] .cal-day-head h3 {
+  position: relative; padding-bottom: 0.28em;
+}
+[data-theme-base="light"] .grouphead::after,
+[data-theme-base="light"] .cal-day-head h3::after {
+  content: ""; position: absolute; left: 0; bottom: 0;
+  width: 2.6em; height: 3px; border-radius: 2px;
+  background: var(--brand);
+  /* Tapered and slightly ragged, the way a loaded brush leaves a mark. */
+  -webkit-mask-image: linear-gradient(90deg, #000 0 62%, rgba(0,0,0,.35) 82%, transparent);
+  mask-image: linear-gradient(90deg, #000 0 62%, rgba(0,0,0,.35) 82%, transparent);
+}
+
+/* Type: the display face on headings only. Body stays in the reading face,
+ * because "slight if any" was the brief and a whole screen of a wonky serif
+ * is not slight. */
+[data-theme-base="light"] h1,
+[data-theme-base="light"] h2,
+[data-theme-base="light"] h3,
+[data-theme-base="light"] .brandmark,
+[data-theme-base="light"] .cal-title,
+[data-theme-base="light"] .big {
+  font-family: Fraunces, Georgia, serif;
+  font-variation-settings: "SOFT" 40, "WONK" 1, "opsz" 96;
+  letter-spacing: 0.005em;
+}
+
+/* The selected day is a splatter of paint rather than a filled circle. */
+[data-theme-base="light"] .cal-cell.selected .cal-num {
+  border-radius: 52% 47% 55% 45% / 47% 55% 45% 53%;
+}
+[data-theme-base="light"] .chip.on {
+  border-radius: 999px 999px 998px 999px / 999px 998px 999px 999px;
+}

@@ -56,4 +56,54 @@ N8N_DARK = {
 }
 
 
-ALL = [N8N_DARK]
+PAINTING = {
+    "name": "Painting",
+    "author": "built in",
+    "base": "light",
+    "tokens": {
+        "--brand": "#9F4E2D",
+        "--brand-hover": "#B85C36",
+        "--brand-press": "#843F24",
+        "--brand-tint": "rgba(159, 78, 45, 0.12)",
+        "--brand-edge": "rgba(159, 78, 45, 0.32)",
+        "--canvas": "#DED3BF",
+        "--canvas-dot": "#D3C7B1",
+        "--surface": "#EFE7D7",
+        "--surface-2": "#E7DDCA",
+        "--surface-3": "#DCD0B9",
+        "--line": "#C4B69C",
+        "--line-lit": "#A8977A",
+        "--text": "#000000",
+        "--text-2": "#4A4237",
+        "--text-3": "#6F6553",
+        "--text-4": "#A2947C",
+        "--ok": "#487039",
+        "--ok-tint": "rgba(72, 112, 57, 0.14)",
+        "--warn": "#846007",
+        "--warn-tint": "rgba(132, 96, 7, 0.14)",
+        "--danger": "#5E2114",
+        "--danger-tint": "rgba(94, 33, 20, 0.14)",
+        "--info": "#3D5A80",
+        "--info-tint": "rgba(61, 90, 128, 0.14)",
+        "--node-agenda": "#6B5B95",
+        "--node-inbox": "#3D5A80",
+        "--node-budget": "#487039",
+        "--node-system": "#6F6553",
+        "--font":
+            "Fraunces, \"Iowan Old Style\", \"Palatino Linotype\", Georgia, "
+            "serif",
+        "--mono": "ui-monospace, \"SFMono-Regular\", Menlo, monospace",
+        "--shadow":
+            "0 1px 2px rgba(60, 45, 25, 0.16), 0 6px 14px rgba(60, 45, "
+            "25, 0.10)",
+        "--shadow-lg": "0 10px 30px rgba(60, 45, 25, 0.18)",
+        "--r": "3px",
+        "--r-sm": "2px",
+        "--r-lg": "5px",
+        "--r-pill": "999px",
+        "--track": "0.05em",
+    },
+}
+
+
+ALL = [N8N_DARK, PAINTING]

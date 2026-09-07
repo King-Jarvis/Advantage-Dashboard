@@ -119,17 +119,18 @@ def test_an_enormous_file_is_refused_before_parsing():
 # ── storage ───────────────────────────────────────────────────────────────
 def test_the_builtin_is_seeded_and_valid(conn):
     got = themes.all_themes(conn)
-    assert [t["name"] for t in got] == ["n8n Dark"]
-    assert got[0]["builtin"] is True
-    # It must survive its own validator, or it could not be re-imported.
-    themes.validate_tokens(got[0]["tokens"])
+    assert {t["name"] for t in got} == {"n8n Dark", "Painting"}
+    assert all(t["builtin"] for t in got)
+    # Each must survive its own validator, or it could not be re-imported.
+    for t in got:
+        themes.validate_tokens(t["tokens"])
 
 
 def test_seeding_twice_does_not_duplicate(conn):
     from dashboard import schema
     schema.migrate(conn)
     schema.migrate(conn)
-    assert len(themes.all_themes(conn)) == 1
+    assert len(themes.all_themes(conn)) == len(builtin_themes.ALL)
 
 
 def test_a_builtin_cannot_be_deleted(conn):
@@ -142,7 +143,8 @@ def test_a_builtin_cannot_be_deleted(conn):
 def test_an_imported_theme_can_be_deleted(conn):
     tid = themes.save(conn, themes.parse(theme(name="Mine")))
     themes.delete(conn, tid)
-    assert [t["name"] for t in themes.all_themes(conn)] == ["n8n Dark"]
+    assert {t["name"] for t in themes.all_themes(conn)} == {
+        t["name"] for t in builtin_themes.ALL}
 
 
 def test_deleting_something_that_is_not_there(conn):
@@ -178,3 +180,98 @@ def test_the_spec_matches_the_stylesheet():
 
 def test_the_preview_tokens_are_all_themeable():
     assert set(themes.PREVIEW) <= set(themes.SPEC)
+
+
+# ── the Painting theme ────────────────────────────────────────────────────
+def _rgb(h):
+    h = h.lstrip("#")
+    return [int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+
+
+def _lin(c):
+    return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+
+
+def _lum(h):
+    p = [_lin(c) for c in _rgb(h)]
+    return 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]
+
+
+def contrast(a, b):
+    la, lb = _lum(a), _lum(b)
+    hi, lo = max(la, lb), min(la, lb)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def painting():
+    return next(t for t in builtin_themes.ALL if t["name"] == "Painting")
+
+
+def test_painting_is_a_light_theme():
+    assert painting()["base"] == "light"
+
+
+def test_the_ink_is_black():
+    """The brief, and the reason the rest of the palette is affordable."""
+    assert painting()["tokens"]["--text"] == "#000000"
+
+
+@pytest.mark.parametrize("token", [
+    "--text", "--text-2", "--text-3", "--brand",
+    "--ok", "--warn", "--danger", "--info",
+])
+def test_every_colour_that_carries_words_clears_aa(token):
+    """Atmosphere is worth nothing if the inbox cannot be read at arm's
+    length, which is where this is actually used."""
+    t = painting()["tokens"]
+    assert contrast(t[token], t["--surface"]) >= 4.5, (
+        "%s is %.2f:1 on --surface" % (token, contrast(t[token], t["--surface"])))
+
+
+def test_body_text_is_far_past_the_minimum():
+    t = painting()["tokens"]
+    assert contrast(t["--text"], t["--surface"]) >= 12
+
+
+def test_the_dormant_ink_is_never_mistaken_for_readable():
+    """--text-4 exists for marks nobody reads. If it happened to clear AA it
+    would get used for something."""
+    t = painting()["tokens"]
+    assert contrast(t["--text-4"], t["--surface"]) < 4.5
+
+
+def test_warn_and_danger_are_told_apart_by_lightness():
+    """They are the two whose confusion actually costs something on a budget
+    screen, and hue alone does not separate them for everyone."""
+    t = painting()["tokens"]
+    assert contrast(t["--warn"], t["--danger"]) >= 1.6
+
+
+def test_the_canvas_texture_is_barely_there():
+    """--canvas-dot is felt, not read. A visible weave is a distraction."""
+    t = painting()["tokens"]
+    assert 1.0 < contrast(t["--canvas"], t["--canvas-dot"]) < 1.3
+
+
+def test_panels_sit_above_the_ground():
+    t = painting()["tokens"]
+    assert _lum(t["--surface"]) > _lum(t["--canvas"]), (
+        "a painting has to be lighter than the wall to read as sitting on it")
+
+
+def test_the_display_face_is_bundled_not_fetched():
+    """font-src is 'self'. A theme naming a family that is not shipped and
+    not on the device silently falls back."""
+    import pathlib
+    assert pathlib.Path(
+        "app/src/dashboard/static/fonts/fraunces.woff2").exists()
+    css = pathlib.Path("app/src/dashboard/static/styles.css").read_text()
+    assert "@font-face" in css and "/fonts/fraunces.woff2" in css
+    assert "Fraunces" in painting()["tokens"]["--font"]
+
+
+def test_the_font_licence_ships_with_the_font():
+    import pathlib
+    lic = pathlib.Path(
+        "app/src/dashboard/static/fonts/LICENSE-Fraunces.txt")
+    assert lic.exists() and "Open Font License" in lic.read_text()
