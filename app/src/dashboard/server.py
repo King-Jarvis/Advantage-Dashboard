@@ -109,6 +109,10 @@ ROUTES = [
     ("history",  {"GET"},         re.compile(r"^/api/view/history$"),      "session"),
     ("coverage", {"GET"},         re.compile(r"^/api/view/coverage$"),     "session"),
     ("txns",     {"GET"},         re.compile(r"^/api/view/transactions$"),  "session"),
+    ("unfiled",  {"GET"},         re.compile(r"^/api/view/unfiled$"),       "session"),
+    ("fileone",  {"PATCH"},
+     re.compile(r"^/api/edit/transaction/([0-9a-f]{32})$"),                 "session"),
+    ("filemany", {"POST"},        re.compile(r"^/api/edit/by-payee$"),      "session"),
     ("upload",   {"POST"},        re.compile(r"^/api/import/upload$"),     "session"),
     ("batches",  {"GET"},         re.compile(r"^/api/import/batches$"),    "session"),
     ("batch",    {"GET", "POST", "DELETE"},
@@ -478,6 +482,46 @@ class Handler(BaseHTTPRequestHandler):
         counts["model_available"] = has_key
         counts["model_allowed"] = allowed
         self.json_out(counts)
+
+    def api_unfiled(self, conn, session):
+        from . import ledger
+        filed = (self.query().get("filed") or [""])[0] == "1"
+        self.json_out({"filed": filed,
+                       "groups": ledger.payee_groups(conn, filed=filed)})
+
+    def api_fileone(self, conn, session, txn_id):
+        from . import ledger
+        data = self.body_json()
+        fields = {k: v for k, v in data.items()
+                  if k in ("category_id", "payee", "notes", "date")}
+        if not fields:
+            raise ValueError("nothing to change")
+        try:
+            ledger.update_transaction(conn, txn_id, **fields)
+        except KeyError:
+            return self.fail(404, "no such transaction")
+        self.json_out({"id": txn_id, "updated": sorted(fields)})
+
+    def api_filemany(self, conn, session):
+        """File every unfiled row for one merchant.
+
+        A merchant, not a list of ids: the client has just been shown the
+        grouping and would otherwise post back a hundred ids it does not need
+        to know about.
+        """
+        from . import ledger
+        data = self.body_json()
+        key = str(data.get("payee_key", ""))
+        category_id = str(data.get("category_id", ""))
+        if not key:
+            raise ValueError("payee_key is required")
+        try:
+            n = ledger.categorise_payee(
+                conn, key, category_id,
+                overwrite=bool(data.get("overwrite")))
+        except KeyError:
+            return self.fail(404, "no such category")
+        self.json_out({"filed": n})
 
     def _month(self):
         month = (self.query().get("month") or [""])[0]

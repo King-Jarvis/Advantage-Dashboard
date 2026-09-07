@@ -15,6 +15,7 @@ const state = {
   accounts: [], categories: [], coverage: null, pending: [],
   batch: null, rows: [], busy: false, error: "", note: "",
   addingAccount: false,
+  unfiled: [], allCats: [], unfiledBand: "in", showFiled: false,
 };
 
 function fmtRange(a, b) {
@@ -98,10 +99,104 @@ function reviewRow(row, refresh) {
 }
 
 /* ── the view ───────────────────────────────────────────────────────────── */
+
+/* What still needs filing, grouped by merchant.
+ *
+ * Grouped because that is how the work divides: twelve payroll deposits are
+ * one decision. A flat list of a hundred and twenty-three rows invites you to
+ * make it a hundred and twenty-three times.
+ *
+ * Money in is the default band. Nothing arriving counts towards a budget
+ * until it is filed as income, so those rows are the ones actually blocking
+ * anything -- and there are usually a handful of them against a hundred
+ * outgoings.
+ *
+ * Filing a merchant also teaches the classifier, so the next statement
+ * recognises it without asking anyone.
+ */
+const BANDS = [
+  { id: "in", label: "Money in", test: (g) => g.total_cents > 0 },
+  { id: "out", label: "Money out", test: (g) => g.total_cents <= 0 },
+  { id: "all", label: "All", test: () => true },
+];
+
+function unfiledPanel(refresh) {
+  const band = BANDS.find((b) => b.id === state.unfiledBand) || BANDS[0];
+  const shown = state.unfiled.filter(band.test);
+
+  const chips = el("div", { class: "chips" },
+    ...BANDS.map((b) => el("button", {
+      type: "button",
+      class: "chip" + (b.id === state.unfiledBand ? " on" : ""),
+      "aria-pressed": b.id === state.unfiledBand ? "true" : "false",
+      onclick: () => { state.unfiledBand = b.id; return refresh(); },
+    }, el("span", { text: b.label }),
+       el("span", { class: "chip-n",
+                    text: String(state.unfiled.filter(b.test).length) }))),
+    el("div", { class: "spacer" }),
+    // Already-filed merchants, so a wrong decision can be changed rather than
+    // lived with. Off by default: they are not work waiting.
+    el("label", { class: "check showfiled" },
+      el("input", {
+        type: "checkbox", class: "check", checked: state.showFiled || null,
+        onchange: () => { state.showFiled = !state.showFiled; return refresh(); },
+      }),
+      el("span", { text: "Show ones already filed" })));
+
+  if (!shown.length) {
+    return el("div", {}, chips,
+      el("div", { class: "hint pad",
+        text: state.showFiled
+          ? "Nothing filed under that heading yet."
+          : "Nothing left to file here." }));
+  }
+
+  const rows = shown.map((g) => {
+    const sel = el("select", { class: "input",
+      "aria-label": `Category for ${g.example}` },
+      el("option", { value: "",
+        text: g.category ? `${g.category}${g.mixed ? " (mixed)" : ""}`
+                         : "Choose a category…" }),
+      ...state.allCats.map((c) => el("option", {
+        value: c.id,
+        text: c.is_income ? `${c.name} (income)` : c.name })));
+    sel.addEventListener("change", async () => {
+      if (!sel.value) return;
+      sel.disabled = true;
+      try {
+        const r = await post("/api/edit/by-payee", {
+          payee_key: g.key, category_id: sel.value,
+          // Only when looking at things already filed, and only then: a
+          // backlog sweep must never rewrite a decision made by hand.
+          overwrite: Boolean(state.showFiled),
+        });
+        state.note = `Filed ${r.filed} row${r.filed === 1 ? "" : "s"}.`;
+      } catch (e) {
+        state.error = (e && e.message) || "Could not file those.";
+      }
+      return refresh();
+    });
+    return el("div", { class: "unfiled-row" },
+      el("div", { class: "grow" },
+        el("div", { class: "unfiled-payee", text: g.example || "(no payee)" }),
+        el("div", { class: "hint",
+          text: `${g.count} row${g.count === 1 ? "" : "s"} \u00b7 latest ${g.latest}`
+              + (g.category ? ` \u00b7 now ${g.category}` : "") })),
+      moneyEl(g.total_cents, "unfiled-amt"),
+      sel);
+  });
+
+  return el("div", { class: "unfiled" }, chips,
+    el("div", { class: "hint",
+      text: "Biggest first. Choosing a category files every row for that "
+          + "merchant, and teaches the classifier for next time." }),
+    ...rows);
+}
+
 export async function importView(container, { onDone } = {}) {
-  const [accts, cats, cov, batches] = await Promise.all([
+  const [accts, cats, cov, batches, unfiled] = await Promise.all([
     get("/api/accounts"), get("/api/categories"), get("/api/view/coverage"),
-    get("/api/import/batches"),
+    get("/api/import/batches"), get(`/api/view/unfiled?filed=${state.showFiled ? 1 : 0}`),
   ]);
   // On-budget accounts first: a statement almost always belongs to one, and
   // defaulting to a tracking account is a mistake nobody would notice until
@@ -109,6 +204,10 @@ export async function importView(container, { onDone } = {}) {
   state.accounts = [...accts.accounts].sort(
     (a, b) => (b.on_budget ? 1 : 0) - (a.on_budget ? 1 : 0));
   state.categories = cats.categories;
+  state.unfiled = unfiled.groups || [];
+  // Income categories are offered here even though the classifier never
+  // suggests one: filing a salary is exactly the job this panel is for.
+  state.allCats = cats.categories;
   state.coverage = cov;
   state.pending = (batches.batches || []).filter((b) => b.state === "review");
 
@@ -305,6 +404,15 @@ export async function importView(container, { onDone } = {}) {
         el("span", { class: "node-title", text: "Months covered" })),
       el("div", { class: "node-body" }, coverageStrip(state.coverage)));
 
+    const unfiledCard = el("section", { class: "node", dataset: { kind: "budget" } },
+      el("header", { class: "node-head" },
+        el("span", { class: "node-title", text: "Still uncategorised" }),
+        el("div", { class: "spacer" }),
+        el("span", { class: "label",
+          text: `${state.unfiled.length} merchant`
+              + `${state.unfiled.length === 1 ? "" : "s"}` })),
+      el("div", { class: "node-body" }, unfiledPanel(refresh)));
+
     const parts = [uploader];
 
     if (state.batch && state.rows.length) {
@@ -343,7 +451,9 @@ export async function importView(container, { onDone } = {}) {
               } })))));
     }
 
-    parts.push(coverageCard);
+    // Before coverage: unfiled rows are work waiting, and coverage is a
+    // reference. Work first.
+    parts.push(unfiledCard, coverageCard);
     mount(container, ...parts);
   }
 

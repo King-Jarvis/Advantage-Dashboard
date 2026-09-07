@@ -1692,3 +1692,145 @@ def test_bulk_categorising_obeys_the_setting_not_the_caller(live, monkeypatch):
                       headers={"Cookie": cookie, "X-CSRF-Token": csrf})
     assert called == [], "asked the model with the setting switched off"
     assert body["model_allowed"] is False
+
+
+# ── filing imported rows ──────────────────────────────────────────────────
+def _ledger_with_unfiled(n=3):
+    from dashboard import ledger
+    from dashboard import storage as st
+    conn = st.connect()
+    gid = ledger.create_category_group(conn, "Everyday")
+    cid = ledger.create_category(conn, gid, "Groceries")
+    acct = ledger.create_account(conn, "Checking")
+    for i in range(n):
+        ledger.add_transaction(conn, acct, "2026-08-0%d" % (i + 1), -1000,
+                               "TESCO METRO 4471%d" % i)
+    ledger.add_transaction(conn, acct, "2026-08-09", -500, "SOMEWHERE ELSE")
+    conn.close()
+    return cid
+
+
+def test_unfiled_rows_are_grouped_by_merchant(live):
+    """Twelve payroll deposits are one decision, not twelve."""
+    _ledger_with_unfiled(3)
+    cookie, _ = login(live)
+    _, _, got = call(live, "GET", "/api/view/unfiled", headers={"Cookie": cookie})
+    keys = {g["key"]: g["count"] for g in got["groups"]}
+    assert keys.get("tesco metro") == 3
+    assert keys.get("somewhere else") == 1
+
+
+def test_filing_a_merchant_files_every_row_of_it(live):
+    cid = _ledger_with_unfiled(3)
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    _, _, r = call(live, "POST", "/api/edit/by-payee",
+                   {"payee_key": "tesco metro", "category_id": cid}, headers=h)
+    assert r["filed"] == 3
+
+    from dashboard import storage as st
+    conn = st.connect()
+    left = conn.execute("SELECT COUNT(*) FROM transactions"
+                        " WHERE category_id IS NULL").fetchone()[0]
+    conn.close()
+    assert left == 1, "filed the wrong rows too"
+
+
+def test_filing_never_overwrites_a_decision_already_made(live):
+    """This clears a backlog. It must not silently rewrite what you have
+    already filed by hand."""
+    from dashboard import ledger
+    from dashboard import storage as st
+    cid = _ledger_with_unfiled(2)
+    conn = st.connect()
+    gid = conn.execute("SELECT id FROM category_groups LIMIT 1").fetchone()[0]
+    other = ledger.create_category(conn, gid, "Fuel")
+    first = conn.execute(
+        "SELECT id FROM transactions ORDER BY date LIMIT 1").fetchone()[0]
+    ledger.update_transaction(conn, first, category_id=other)
+    conn.close()
+
+    cookie, csrf = login(live)
+    call(live, "POST", "/api/edit/by-payee",
+         {"payee_key": "tesco metro", "category_id": cid},
+         headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+
+    conn = st.connect()
+    kept = conn.execute("SELECT category_id FROM transactions WHERE id=?",
+                        (first,)).fetchone()[0]
+    conn.close()
+    assert kept == other, "an existing category was overwritten"
+
+
+def test_a_single_row_can_be_filed(live):
+    cid = _ledger_with_unfiled(1)
+    from dashboard import storage as st
+    conn = st.connect()
+    txn = conn.execute("SELECT id FROM transactions LIMIT 1").fetchone()[0]
+    conn.close()
+    cookie, csrf = login(live)
+    status, _, _ = call(live, "PATCH", f"/api/edit/transaction/{txn}",
+                        {"category_id": cid},
+                        headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+    assert status == 200
+
+
+def test_filing_into_a_category_that_does_not_exist_is_refused(live):
+    _ledger_with_unfiled(1)
+    cookie, csrf = login(live)
+    status, _, _ = call(live, "POST", "/api/edit/by-payee",
+                        {"payee_key": "tesco metro", "category_id": "0" * 32},
+                        headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+    assert status == 404
+
+
+def test_filed_merchants_can_be_listed_and_changed(live):
+    """A wrong decision should be changeable, not lived with."""
+    from dashboard import ledger
+    from dashboard import storage as st
+    cid = _ledger_with_unfiled(2)
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    call(live, "POST", "/api/edit/by-payee",
+         {"payee_key": "tesco metro", "category_id": cid}, headers=h)
+
+    _, _, unfiled = call(live, "GET", "/api/view/unfiled",
+                         headers={"Cookie": cookie})
+    assert "tesco metro" not in {g["key"] for g in unfiled["groups"]}
+
+    _, _, done = call(live, "GET", "/api/view/unfiled?filed=1",
+                      headers={"Cookie": cookie})
+    grp = next(g for g in done["groups"] if g["key"] == "tesco metro")
+    assert grp["category"] == "Groceries" and grp["count"] == 2
+
+    conn = st.connect()
+    gid = conn.execute("SELECT id FROM category_groups LIMIT 1").fetchone()[0]
+    other = ledger.create_category(conn, gid, "Fuel")
+    conn.close()
+
+    _, _, r = call(live, "POST", "/api/edit/by-payee",
+                   {"payee_key": "tesco metro", "category_id": other,
+                    "overwrite": True}, headers=h)
+    assert r["filed"] == 2
+
+    _, _, again = call(live, "GET", "/api/view/unfiled?filed=1",
+                       headers={"Cookie": cookie})
+    grp = next(g for g in again["groups"] if g["key"] == "tesco metro")
+    assert grp["category"] == "Fuel"
+
+
+def test_incoming_and_outgoing_are_distinguishable(live):
+    """The panel defaults to money in, because nothing arriving counts towards
+    a budget until it is filed as income."""
+    from dashboard import ledger
+    from dashboard import storage as st
+    conn = st.connect()
+    acct = ledger.create_account(conn, "Checking")
+    ledger.add_transaction(conn, acct, "2026-08-01", 250000, "PAYROLL DEPOSIT")
+    ledger.add_transaction(conn, acct, "2026-08-02", -1200, "TESCO METRO 4471")
+    conn.close()
+    cookie, _ = login(live)
+    _, _, got = call(live, "GET", "/api/view/unfiled", headers={"Cookie": cookie})
+    by = {g["key"]: g["total_cents"] for g in got["groups"]}
+    assert by["payroll deposit"] > 0
+    assert by["tesco metro"] < 0

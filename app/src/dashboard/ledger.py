@@ -430,6 +430,71 @@ def absorbed_overspend_through(conn, month):
     return total
 
 
+def payee_groups(conn, filed=False, limit=300):
+    """What is still unfiled, grouped by merchant, biggest first.
+
+    Grouped because that is how the work actually divides: twelve payroll
+    deposits are one decision, and a list of a hundred and twenty-three rows
+    invites you to make it a hundred and twenty-three times.
+    """
+    from .text import norm_payee
+    where = "t.category_id IS NULL" if not filed else "t.category_id IS NOT NULL"
+    rows = conn.execute(
+        "SELECT t.id, t.payee, t.amount_cents, t.date, t.category_id,"
+        "       c.name category_name FROM transactions t"
+        " JOIN accounts a ON a.id = t.account_id"
+        " LEFT JOIN categories c ON c.id = t.category_id"
+        " WHERE t.deleted=0 AND %s"
+        "   AND t.transfer_id IS NULL AND t.parent_id IS NULL"
+        " ORDER BY t.date DESC" % where).fetchall()
+    groups = {}
+    for r in rows:
+        key = norm_payee(r["payee"] or "")
+        g = groups.setdefault(key, {
+            "key": key, "example": r["payee"] or "", "count": 0,
+            "total_cents": 0, "latest": r["date"],
+            "category_id": r["category_id"], "category": r["category_name"],
+            "mixed": False})
+        g["count"] += 1
+        g["total_cents"] += r["amount_cents"]
+        # A merchant filed two different ways is worth flagging rather than
+        # showing one of the two as though it were the whole story.
+        if r["category_id"] != g["category_id"]:
+            g["mixed"] = True
+    return sorted(groups.values(), key=lambda g: -abs(g["total_cents"]))[:limit]
+
+
+def categorise_payee(conn, payee_key, category_id, overwrite=False):
+    """File every row for one merchant at once.
+
+    By default only rows without a category are touched: clearing a backlog
+    must not silently rewrite decisions already made. `overwrite` is for the
+    deliberate case -- you looked at a merchant you had already filed and
+    changed your mind about it.
+    """
+    from .text import norm_payee
+    if conn.execute("SELECT 1 FROM categories WHERE id=?",
+                    (category_id,)).fetchone() is None:
+        raise KeyError(category_id)
+    clause = "" if overwrite else " AND category_id IS NULL"
+    rows = conn.execute(
+        "SELECT id, payee FROM transactions"
+        " WHERE deleted=0" + clause +
+        "   AND transfer_id IS NULL AND parent_id IS NULL").fetchall()
+    n = 0
+    for r in rows:
+        if norm_payee(r["payee"] or "") != payee_key:
+            continue
+        conn.execute("UPDATE transactions SET category_id=? WHERE id=?",
+                     (category_id, r["id"]))
+        n += 1
+    if n:
+        _audit(conn, "update", "transaction", payee_key,
+               "categorised %d rows" % n)
+    conn.commit()
+    return n
+
+
 def to_be_budgeted(conn, month):
     """Money that has arrived but has not yet been given a job."""
     end = month + "-31"

@@ -1331,3 +1331,20 @@ textarea.input { resize: vertical; min-height: 5.5rem; line-height: 1.45; }
 .catedit summary:hover { color: var(--text); }
 .catedit .addgrid { margin-top: var(--s2); }
 .catedit .error:empty { display: none; }
+
+/* What is still unfiled, by merchant. One decision per shop rather than one
+ * per row: twelve payroll deposits are a single choice. */
+.unfiled { display: grid; gap: var(--s2); }
+.unfiled-row {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  padding: var(--s2) 0; border-top: 1px solid var(--line);
+}
+.unfiled-row:first-of-type { border-top: 0; }
+.unfiled-payee { overflow-wrap: anywhere; }
+.unfiled-amt { font-variant-numeric: tabular-nums; flex: none; }
+.unfiled-row .input { flex: 0 1 14rem; min-width: 11rem; }
+@media (max-width: 620px) {
+  .unfiled-row .input { flex: 1 1 100%; }
+}
+.showfiled { font-size: 0.84rem; color: var(--text-2); white-space: nowrap; }
+.unfiled .chips { margin-bottom: var(--s2); align-items: center; }
