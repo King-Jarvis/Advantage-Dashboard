@@ -114,24 +114,9 @@ function reviewRow(row, refresh) {
  * Filing a merchant also teaches the classifier, so the next statement
  * recognises it without asking anyone.
  */
-/* Which side a merchant sits on.
- *
- * Before it is filed there is only the amount to go on, and the sign is a
- * decent guess. Once filed, the category is the answer and the sign is not:
- * move Amazon Prime from Transfer In to Subscriptions and it is an expense
- * now, whatever the refund that started it looked like. Banding by the sign
- * would leave it sitting under Money in, contradicting the category you just
- * gave it.
- */
-function side(g) {
-  if (g.is_income === true) return "in";
-  if (g.is_income === false) return "out";
-  return g.total_cents > 0 ? "in" : "out";
-}
-
 const BANDS = [
-  { id: "in", label: "Money in", test: (g) => side(g) === "in" },
-  { id: "out", label: "Money out", test: (g) => side(g) === "out" },
+  { id: "in", label: "Money in", test: (g) => g.total_cents > 0 },
+  { id: "out", label: "Money out", test: (g) => g.total_cents <= 0 },
   { id: "all", label: "All", test: () => true },
 ];
 
@@ -196,9 +181,7 @@ function unfiledPanel(refresh) {
         el("div", { class: "unfiled-payee", text: g.example || "(no payee)" }),
         el("div", { class: "hint",
           text: `${g.count} row${g.count === 1 ? "" : "s"} \u00b7 latest ${g.latest}`
-              + (g.category
-                 ? ` \u00b7 ${g.category}${g.is_income ? " (income)" : ""}`
-                 : "") })),
+              + (g.category ? ` \u00b7 now ${g.category}` : "") })),
       moneyEl(g.total_cents, "unfiled-amt"),
       sel);
   });

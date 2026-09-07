@@ -441,7 +441,7 @@ def payee_groups(conn, filed=False, limit=300):
     where = "t.category_id IS NULL" if not filed else "t.category_id IS NOT NULL"
     rows = conn.execute(
         "SELECT t.id, t.payee, t.amount_cents, t.date, t.category_id,"
-        "       c.name category_name, c.is_income FROM transactions t"
+        "       c.name category_name FROM transactions t"
         " JOIN accounts a ON a.id = t.account_id"
         " LEFT JOIN categories c ON c.id = t.category_id"
         " WHERE t.deleted=0 AND %s"
@@ -454,10 +454,6 @@ def payee_groups(conn, filed=False, limit=300):
             "key": key, "example": r["payee"] or "", "count": 0,
             "total_cents": 0, "latest": r["date"],
             "category_id": r["category_id"], "category": r["category_name"],
-            # Whether the category treats this as money coming in. Once filed,
-            # that is what decides which side a merchant belongs on -- the
-            # amount sign was only ever a stand-in for it.
-            "is_income": bool(r["is_income"]) if r["category_id"] else None,
             "mixed": False})
         g["count"] += 1
         g["total_cents"] += r["amount_cents"]
