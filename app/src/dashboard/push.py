@@ -97,6 +97,13 @@ def event_payload(row):
         "start": {key: stamp(row["starts_at"])},
         "end": {key: stamp(row["ends_at"] or row["starts_at"])},
     }
+    if not row["all_day"]:
+        # A Z offset is enough for a one-off, but a recurring event needs an
+        # explicit timeZone on both ends or Google answers 400 "required"
+        # without naming the field. Sent always rather than only when a rule
+        # is present, so the two paths cannot diverge.
+        body["start"]["timeZone"] = "UTC"
+        body["end"]["timeZone"] = "UTC"
     if row["location"]:
         body["location"] = row["location"]
     if row["description"]:

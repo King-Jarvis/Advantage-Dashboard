@@ -314,3 +314,22 @@ def test_the_default_reminder_is_sent_explicitly(conn, acct, calls):
     feeds.create_event(conn, acct, title="x", starts_at="2026-09-15T09:00:00")
     push.run(conn)
     assert calls[0]["payload"]["reminders"] == {"useDefault": True}
+
+
+def test_a_timed_event_names_its_timezone(conn, acct, calls):
+    """A Z offset satisfies a one-off. A recurring event does not go without
+    an explicit timeZone -- Google answers 400 'required' and names nothing."""
+    feeds.create_event(conn, acct, title="Standup",
+                       starts_at="2026-09-15T09:00:00", recurrence="weekly")
+    push.run(conn)
+    start = calls[0]["payload"]["start"]
+    assert start["timeZone"] == "UTC"
+    assert calls[0]["payload"]["end"]["timeZone"] == "UTC"
+
+
+def test_an_all_day_event_names_no_timezone(conn, acct, calls):
+    """A date has no time of day to place in a zone."""
+    feeds.create_event(conn, acct, title="Holiday", all_day=True,
+                       starts_at="2026-09-15T00:00:00")
+    push.run(conn)
+    assert "timeZone" not in calls[0]["payload"]["start"]
