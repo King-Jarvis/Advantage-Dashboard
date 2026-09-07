@@ -16,22 +16,33 @@ import { el, money, moneyEl, mount, svg } from "./dom.js";
  * send -- left every row blank, which looked like a styling problem and was
  * not. */
 function whenLabel(e) {
-  if (e.all_day) return "all day";
   const d = new Date(String(e.starts_at).length <= 10
     ? `${e.starts_at}T00:00:00` : e.starts_at);
-  if (Number.isNaN(d.getTime())) return "";
+  if (Number.isNaN(d.getTime())) return e.all_day ? "all day" : "";
+
+  const today = new Date();
+  const sameDay = (a, b) => a.getDate() === b.getDate()
+    && a.getMonth() === b.getMonth() && a.getFullYear() === b.getFullYear();
+  const tom = new Date(Date.now() + 86400000);
+
+  const DAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  // Within the week a weekday name is enough; past that it needs a date,
+  // because "Fri" three weeks out tells you almost nothing.
+  const ahead = Math.round((d - today) / 86400000);
+  const day = sameDay(d, today) ? "today"
+    : sameDay(d, tom) ? "tom"
+    : ahead < 7 ? DAY[d.getDay()]
+    : `${d.getDate()} ${MON[d.getMonth()]}`;
+
+  // An all-day event still has to say which day. "all day" on its own is the
+  // one thing about it that was never in question.
+  if (e.all_day) return day === "today" ? "all day" : `${day} · all day`;
+
   const hhmm = `${String(d.getHours()).padStart(2, "0")}:`
              + `${String(d.getMinutes()).padStart(2, "0")}`;
-  const today = new Date();
-  const sameDay = d.getDate() === today.getDate()
-    && d.getMonth() === today.getMonth()
-    && d.getFullYear() === today.getFullYear();
-  if (sameDay) return hhmm;
-  const tom = new Date(Date.now() + 86400000);
-  const isTom = d.getDate() === tom.getDate() && d.getMonth() === tom.getMonth();
-  const day = isTom ? "tom"
-    : ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()];
-  return `${day} ${hhmm}`;
+  return day === "today" ? hhmm : `${day} ${hhmm}`;
 }
 
 function widget(kind, title, action, ...body) {
