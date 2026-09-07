@@ -2090,3 +2090,34 @@ def test_candidate_pairs_are_offered_but_not_applied(live):
     assert len(t["transfers"]) == 1 and t["candidates"] == []
     assert t["transfers"][0]["from_account"] == "Checking"
     assert t["transfers"][0]["to_account"] == "Savings"
+
+
+def test_a_transfer_can_be_unlinked_over_http(live):
+    """DELETE with a body: the id identifies which pair to separate."""
+    from dashboard import ledger
+    from dashboard import storage as st
+    conn = st.connect()
+    a = ledger.create_account(conn, "Checking")
+    b = ledger.create_account(conn, "Savings")
+    out = ledger.add_transaction(conn, a, "2026-08-01", -50000, "To savings")
+    inn = ledger.add_transaction(conn, b, "2026-08-01", 50000, "From checking")
+    ledger.link_transfer(conn, out, inn)
+    conn.close()
+
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    _, _, before = call(live, "GET", "/api/view/transfers",
+                        headers={"Cookie": cookie})
+    assert len(before["transfers"]) == 1
+
+    status, _, r = call(live, "DELETE", "/api/edit/transfer", {"id": out},
+                        headers=h)
+    assert status == 200 and len(r["unlinked"]) == 2
+
+    _, _, after = call(live, "GET", "/api/view/transfers",
+                       headers={"Cookie": cookie})
+    assert after["transfers"] == []
+    # Both rows survive: unlinking separates, it does not delete.
+    conn = st.connect()
+    assert conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0] == 2
+    conn.close()

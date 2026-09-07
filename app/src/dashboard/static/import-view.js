@@ -8,7 +8,7 @@
  * Duplicates and unparseable rows arrive already excluded. The safe default
  * is not to import; including one is a decision someone makes on purpose.
  */
-import { del, get, patch, post } from "./api.js";
+import { api, del, get, patch, post } from "./api.js";
 import { el, money, moneyEl, mount } from "./dom.js";
 
 const state = {
@@ -16,7 +16,7 @@ const state = {
   batch: null, rows: [], busy: false, error: "", note: "",
   addingAccount: false,
   unfiled: [], allCats: [], unfiledBand: "in", showFiled: false,
-  tracking: [],
+  tracking: [], transfers: [], candidates: [],
 };
 
 function fmtRange(a, b) {
@@ -202,10 +202,96 @@ function unfiledPanel(refresh) {
     ...rows);
 }
 
+/* Movements between accounts.
+ *
+ * A transfer is not spending and not income, so it appears nowhere in the
+ * budget -- which means without a screen of its own it is invisible, and
+ * sixteen thousand pounds of it looks like nothing happening.
+ *
+ * Suggestions are separated from facts. A pair the matcher spotted is a guess
+ * that two amounts belong together; a linked transfer is something you said.
+ */
+function transfersPanel(refresh) {
+  const bits = [];
+
+  if (state.candidates.length) {
+    bits.push(el("div", { class: "label", text: "looks like a pair" }));
+    bits.push(el("div", { class: "hint",
+      text: "Two amounts that cancel, in different accounts, within a few "
+          + "days. Equal and opposite can be coincidence, so nothing is "
+          + "joined until you say so." }));
+    for (const c of state.candidates) {
+      bits.push(el("div", { class: "xfer-row" },
+        el("div", { class: "grow" },
+          el("div", {},
+            el("span", { class: "xfer-acct", text: c.from_account }),
+            el("span", { class: "xfer-arrow", text: " → " }),
+            el("span", { class: "xfer-acct", text: c.to_account })),
+          el("div", { class: "hint",
+            text: `${c.date} · ${c.out_payee || "—"} / ${c.in_payee || "—"}`
+                + (c.days_apart ? ` · ${c.days_apart} day apart` : "") })),
+        moneyEl(c.amount_cents, "xfer-amt"),
+        el("button", { class: "btn", type: "button", text: "Link",
+          onclick: async () => {
+            try {
+              await post("/api/edit/transfer",
+                         { out_id: c.out_id, in_id: c.in_id });
+              state.note = "Linked as one movement.";
+            } catch (e) {
+              state.error = (e && e.message) || "Could not link those.";
+            }
+            return refresh();
+          } })));
+    }
+  }
+
+  if (state.transfers.length) {
+    bits.push(el("div", { class: "label xferhead", text: "linked movements" }));
+    for (const t of state.transfers) {
+      bits.push(el("div", { class: "xfer-row" },
+        el("div", { class: "grow" },
+          el("div", {},
+            el("span", { class: "xfer-acct", text: t.from_account }),
+            el("span", { class: "xfer-arrow", text: " → " }),
+            el("span", { class: "xfer-acct", text: t.to_account }),
+            // Whether it left the budget matters: one changes what there is
+            // to spend, the other only moves it around.
+            t.leaves_budget
+              ? el("span", { class: "pill warn", text: "leaves budget" })
+              : t.enters_budget
+                ? el("span", { class: "pill ok", text: "enters budget" })
+                : null),
+          el("div", { class: "hint", text: `${t.date} · ${t.payee || "—"}` })),
+        moneyEl(t.amount_cents, "xfer-amt"),
+        el("button", { class: "btn ghost", type: "button", text: "Unlink",
+          onclick: async () => {
+            if (!window.confirm("Separate these back into two ordinary "
+                + "transactions?")) return;
+            try {
+              // A real DELETE with a body -- there is no _method convention
+              // here, and inventing one would only work by accident.
+              await api("DELETE", "/api/edit/transfer", { id: t.id });
+            } catch (e) {
+              state.error = (e && e.message) || "Could not unlink that.";
+            }
+            return refresh();
+          } })));
+    }
+  }
+
+  if (!bits.length) {
+    return el("div", { class: "hint pad",
+      text: "No movements between accounts yet. Import a second account and "
+          + "matching pairs will be suggested here." });
+  }
+  return el("div", { class: "xfers" }, ...bits);
+}
+
 export async function importView(container, { onDone } = {}) {
-  const [accts, cats, cov, batches, unfiled] = await Promise.all([
+  const [accts, cats, cov, batches, unfiled, xfers] = await Promise.all([
     get("/api/accounts"), get("/api/categories"), get("/api/view/coverage"),
     get("/api/import/batches"), get(`/api/view/unfiled?filed=${state.showFiled ? 1 : 0}`),
+    get("/api/view/transfers"),
   ]);
   // On-budget accounts first: a statement almost always belongs to one, and
   // defaulting to a tracking account is a mistake nobody would notice until
@@ -213,6 +299,8 @@ export async function importView(container, { onDone } = {}) {
   state.accounts = [...accts.accounts].sort(
     (a, b) => (b.on_budget ? 1 : 0) - (a.on_budget ? 1 : 0));
   state.categories = cats.categories;
+  state.transfers = xfers.transfers || [];
+  state.candidates = xfers.candidates || [];
   state.tracking = unfiled.tracking || [];
   state.unfiled = unfiled.groups || [];
   // Income categories are offered here even though the classifier never
@@ -463,7 +551,17 @@ export async function importView(container, { onDone } = {}) {
 
     // Before coverage: unfiled rows are work waiting, and coverage is a
     // reference. Work first.
-    parts.push(unfiledCard, coverageCard);
+    const xferCard = el("section", { class: "node", dataset: { kind: "budget" } },
+      el("header", { class: "node-head" },
+        el("span", { class: "node-title", text: "Transfers" }),
+        el("div", { class: "spacer" }),
+        el("span", { class: "label",
+          text: `${state.transfers.length} linked`
+              + (state.candidates.length
+                 ? `, ${state.candidates.length} suggested` : "") })),
+      el("div", { class: "node-body" }, transfersPanel(refresh)));
+
+    parts.push(unfiledCard, xferCard, coverageCard);
     mount(container, ...parts);
   }
 

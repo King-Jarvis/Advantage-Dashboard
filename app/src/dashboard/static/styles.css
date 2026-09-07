@@ -1380,3 +1380,16 @@ textarea.input { resize: vertical; min-height: 5.5rem; line-height: 1.45; }
 .incomeamt, .incometotal { font-variant-numeric: tabular-nums; }
 .incometotal { font-weight: 600; }
 .incomebox .hint { margin-top: var(--s2); }
+
+/* Movements between accounts. A transfer appears nowhere in the budget by
+ * design, so without a place of its own it is simply invisible. */
+.xfers { display: grid; gap: 0.35rem; }
+.xferhead { margin-top: var(--s4); }
+.xfer-row {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  padding: var(--s2) 0; border-top: 1px solid var(--line);
+}
+.xfer-acct { font-weight: 550; }
+.xfer-arrow { color: var(--text-3); }
+.xfer-amt { font-variant-numeric: tabular-nums; flex: none; }
+.xfer-row .pill { margin-left: var(--s2); }
