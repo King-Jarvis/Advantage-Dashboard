@@ -32,6 +32,25 @@ export function el(tag, props = {}, ...children) {
   return node;
 }
 
+/* Do something that redraws the page, without losing your place.
+ *
+ * These screens rebuild themselves wholesale after an edit -- the totals
+ * above a row change when the row does, so patching one line in place would
+ * leave the rest lying. Replacing the content sends the browser back to the
+ * top, which after clicking Cover on the twentieth category means finding it
+ * again to click the next one.
+ *
+ * The position is restored after the paint, because a scroll set before the
+ * new content exists has nothing to scroll to.
+ */
+export async function keepingPlace(fn) {
+  const y = window.scrollY;
+  const out = await fn();
+  requestAnimationFrame(() => window.scrollTo(0, y));
+  return out;
+}
+
+
 export function clear(node) {
   while (node.firstChild) node.removeChild(node.firstChild);
   return node;

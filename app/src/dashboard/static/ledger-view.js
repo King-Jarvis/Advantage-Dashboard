@@ -15,7 +15,7 @@
  * things are is the one bug worth a round trip to avoid.
  */
 import { api, get, patch } from "./api.js";
-import { el, money, moneyEl, mount } from "./dom.js";
+import { el, keepingPlace, money, moneyEl, mount } from "./dom.js";
 
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July",
                 "August", "September", "October", "November", "December"];
@@ -165,13 +165,17 @@ function fold(path, title, count, total, kids, cls) {
 export async function ledgerView(container, { month, onBack } = {}) {
   if (state.month === null && month) state.month = month;
 
+  // Re-filing a row rebuilds the tree, and the row you are working on is
+  // usually a long way down it.
   async function reload() {
-    const q = state.month ? `?month=${encodeURIComponent(state.month)}` : "";
-    const d = await get(`/api/view/ledger${q}`);
-    state.tree = d.tree || [];
-    state.accounts = d.accounts || [];
-    state.categories = d.categories || [];
-    render();
+    return keepingPlace(async () => {
+      const q = state.month ? `?month=${encodeURIComponent(state.month)}` : "";
+      const d = await get(`/api/view/ledger${q}`);
+      state.tree = d.tree || [];
+      state.accounts = d.accounts || [];
+      state.categories = d.categories || [];
+      render();
+    });
   }
 
   function setMonth(m) {

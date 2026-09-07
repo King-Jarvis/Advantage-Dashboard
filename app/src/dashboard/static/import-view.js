@@ -9,7 +9,7 @@
  * is not to import; including one is a decision someone makes on purpose.
  */
 import { api, del, get, patch, post } from "./api.js";
-import { el, money, moneyEl, mount } from "./dom.js";
+import { el, keepingPlace, money, moneyEl, mount } from "./dom.js";
 
 const state = {
   accounts: [], categories: [], coverage: null, pending: [],
@@ -361,7 +361,10 @@ export async function importView(container, { onDone } = {}) {
     }
   }
 
-  const refresh = async (rowsOnly) => {
+  // Filing a merchant, linking a transfer, undoing an import: each redraws
+  // the screen, and each is done to something you are looking at partway down
+  // it. Landing back at the top means finding your place again every time.
+  const refresh = async (rowsOnly) => keepingPlace(async () => {
     if (state.batch && rowsOnly) {
       const d = await get(`/api/import/batch/${state.batch.id}`);
       state.batch = d.batch;
@@ -369,7 +372,7 @@ export async function importView(container, { onDone } = {}) {
       return render();
     }
     return importView(container, { onDone });
-  };
+  });
 
   const accountSel = el("select", { class: "input", "aria-label": "Account" });
   for (const a of state.accounts) {

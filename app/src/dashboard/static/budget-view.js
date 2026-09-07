@@ -11,7 +11,8 @@
  */
 import { del, get, patch, post } from "./api.js";
 import { ledgerView } from "./ledger-view.js";
-import { el, money, moneyEl, mount, parseMoney, svg } from "./dom.js";
+import { el, keepingPlace, money, moneyEl, mount, parseMoney, svg }
+  from "./dom.js";
 import { spendingChart } from "./chart.js";
 
 const state = {
@@ -511,9 +512,12 @@ export async function budgetView(container, month, onMonth) {
   state.data = data;
   state.groups = groups.groups;
 
-  const refresh = (localOnly) => localOnly
+  // Covering an overspend, moving money, opening a category: all of them
+  // redraw the screen, and all of them are things you do to a row you are
+  // looking at. Landing back at the top afterwards means finding it again.
+  const refresh = (localOnly) => keepingPlace(() => (localOnly
     ? render()
-    : budgetView(container, state.month, onMonth);
+    : budgetView(container, state.month, onMonth)));
 
   function render() {
     // Grouped, because a flat list of twenty categories is a wall. Ma: the
