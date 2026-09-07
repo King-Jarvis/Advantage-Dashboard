@@ -460,13 +460,23 @@ class Handler(BaseHTTPRequestHandler):
         "settled from what you already told me" and "asked a model" is the
         difference between free and not.
         """
+        import os
+
         from . import categorize
         data = self.body_json()
-        want_model = bool(data.get("use_model", True))
+        # The setting decides, not the caller. A button that spends money on
+        # your behalf while the switch that governs it says off is the kind of
+        # thing you only discover on a bill.
+        allowed = bool(settings.get(conn, "enable_llm_categories"))
+        want_model = bool(data.get("use_model", True)) and allowed
+        if want_model:
+            os.environ["ANTHROPIC_API_KEY"] = settings.get(conn, "anthropic_api_key")
+            os.environ["CLASSIFY_MODEL"] = settings.get(conn, "classify_model")
         has_key = categorize.available()
         counts = categorize.apply_everywhere(
             conn, use_model=want_model and has_key)
         counts["model_available"] = has_key
+        counts["model_allowed"] = allowed
         self.json_out(counts)
 
     def _month(self):

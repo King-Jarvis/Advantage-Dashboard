@@ -216,8 +216,12 @@ export async function importView(container, { onDone } = {}) {
                     + (r.model_calls === 1 ? "" : "s"));
         }
         if (r.unresolved) {
-          bits.push(`${r.unresolved} still unmatched`
-                    + (r.model_available ? "" : " — no API key set"));
+          // Say which of the two reasons it is: a missing key and a
+          // switch left off need different things done about them.
+          const why = !r.model_allowed
+            ? " \u2014 model categorising is off in Settings"
+            : !r.model_available ? " \u2014 no API key set" : "";
+          bits.push(`${r.unresolved} still unmatched` + why);
         }
         state.note = bits.join(" \u00b7 ");
       }

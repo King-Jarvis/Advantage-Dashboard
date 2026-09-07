@@ -1671,3 +1671,24 @@ def test_an_empty_name_is_refused(live):
     status, _, _ = call(live, "PATCH", f"/api/categories/{cid}", {"name": "   "},
                         headers={"Cookie": cookie, "X-CSRF-Token": csrf})
     assert status == 400
+
+
+def test_bulk_categorising_obeys_the_setting_not_the_caller(live, monkeypatch):
+    """A button that spends money while the switch governing it says off is
+    the kind of thing you only discover on a bill."""
+    from dashboard import categorize, settings
+    from dashboard import storage as st
+    called = []
+    monkeypatch.setattr(categorize, "_ask_model",
+                        lambda *a, **k: called.append(1) or {})
+
+    conn = st.connect()
+    settings.set_(conn, "enable_llm_categories", False)
+    conn.close()
+
+    cookie, csrf = login(live)
+    # The caller asks for the model; the setting refuses.
+    _, _, body = call(live, "POST", "/api/categorize", {"use_model": True},
+                      headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+    assert called == [], "asked the model with the setting switched off"
+    assert body["model_allowed"] is False
