@@ -138,6 +138,47 @@ export async function importView(container, { onDone } = {}) {
     accountSel.append(el("option", { value: a.id,
       text: a.on_budget ? a.name : `${a.name} (off budget)` }));
   }
+
+  /* Somewhere to make the first one. The endpoint has always existed and
+   * nothing called it, so an empty ledger left this screen with an empty
+   * dropdown and no way forward -- a dead end rather than a first step. */
+  const newName = el("input", {
+    class: "input", type: "text", id: "acct-name",
+    placeholder: "e.g. UFCU Checking", "aria-label": "New account name" });
+  const newType = el("select", { class: "input", "aria-label": "Account type" },
+    ...[["checking", "Checking"], ["savings", "Savings"],
+        ["credit", "Credit card"], ["cash", "Cash"],
+        ["investment", "Investment (off budget)"]].map(([v, t]) =>
+      el("option", { value: v, text: t })));
+
+  async function addAccount() {
+    const name = newName.value.trim();
+    if (!name) { state.error = "Give the account a name."; return render(); }
+    state.busy = true; state.error = "";
+    try {
+      // Investments are tracked, not budgeted: money in one is not money you
+      // are about to spend, and counting it as such makes every envelope lie.
+      await post("/api/accounts", {
+        name, type: newType.value,
+        on_budget: newType.value !== "investment",
+      });
+      state.note = `Added ${name}.`;
+    } catch (e) {
+      state.error = (e && e.message) || "Could not add that account.";
+    }
+    state.busy = false;
+    return importView(container, { onDone });
+  }
+
+  const addRow = el("div", { class: "addacct" },
+    el("div", { class: "label",
+      text: state.accounts.length ? "Add another account" : "Add an account" }),
+    state.accounts.length ? null : el("div", { class: "hint",
+      text: "A statement belongs to an account, so there has to be one "
+          + "before anything can be imported." }),
+    el("div", { class: "row wrap" }, newName, newType,
+      el("button", { class: "btn", type: "button", text: "Add",
+                     onclick: addAccount })));
   const file = el("input", { type: "file", class: "input",
                              accept: ".csv,.ofx,.qfx,.txt,text/csv",
                              "aria-label": "Statement file" });
@@ -179,14 +220,19 @@ export async function importView(container, { onDone } = {}) {
       el("div", { class: "node-body" },
         state.error ? el("div", { class: "error", text: state.error }) : null,
         state.note ? el("div", { class: "pill ok", text: state.note }) : null,
-        el("div", { class: "row wrap" },
-          accountSel, file,
-          el("button", { class: "btn primary", type: "button",
-                         text: state.busy ? "Reading…" : "Read file",
-                         onclick: doUpload })),
-        el("div", { class: "hint",
-          text: "Nothing is written until you commit. Duplicates and rows that "
-              + "could not be read start excluded." })));
+        state.accounts.length
+          ? el("div", { class: "row wrap" },
+              accountSel, file,
+              el("button", { class: "btn primary", type: "button",
+                             text: state.busy ? "Reading…" : "Read file",
+                             onclick: doUpload }))
+          : null,
+        addRow,
+        state.accounts.length
+          ? el("div", { class: "hint",
+              text: "Nothing is written until you commit. Duplicates and rows "
+                  + "that could not be read start excluded." })
+          : null));
 
     const coverageCard = el("section", { class: "node", dataset: { kind: "budget" } },
       el("header", { class: "node-head" },

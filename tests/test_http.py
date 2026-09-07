@@ -1573,3 +1573,41 @@ def test_a_repeat_the_form_did_not_offer_is_refused(live, tmp_path, monkeypatch)
         headers={"Cookie": cookie, "X-CSRF-Token": csrf})
     assert status == 400
     crypt.reset_for_tests()
+
+
+def test_an_account_can_be_created_and_then_used(live):
+    """The endpoint existed and nothing called it, so an empty ledger left the
+    import screen with an empty dropdown and no way forward."""
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+
+    _, _, before = call(live, "GET", "/api/accounts", headers={"Cookie": cookie})
+    assert before["accounts"] == []
+
+    status, _, made = call(live, "POST", "/api/accounts",
+                           {"name": "UFCU Checking", "type": "checking"},
+                           headers=h)
+    assert status == 201 and made["id"]
+
+    _, _, after = call(live, "GET", "/api/accounts", headers={"Cookie": cookie})
+    assert [a["name"] for a in after["accounts"]] == ["UFCU Checking"]
+    assert after["accounts"][0]["on_budget"] == 1
+
+
+def test_an_investment_account_is_off_budget(live):
+    """Money in one is not money you are about to spend, and counting it as
+    such makes every envelope lie."""
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    call(live, "POST", "/api/accounts",
+         {"name": "Brokerage", "type": "investment", "on_budget": False},
+         headers=h)
+    _, _, got = call(live, "GET", "/api/accounts", headers={"Cookie": cookie})
+    assert got["accounts"][0]["on_budget"] == 0
+
+
+def test_an_account_needs_a_name(live):
+    cookie, csrf = login(live)
+    status, _, _ = call(live, "POST", "/api/accounts", {"name": "  "},
+                        headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+    assert status == 400

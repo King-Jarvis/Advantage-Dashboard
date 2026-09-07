@@ -1276,3 +1276,12 @@ textarea.input { resize: vertical; min-height: 5.5rem; line-height: 1.45; }
 [data-theme-base="light"] .node.widget:nth-child(3n+1) { border-radius: 5px 3px 6px 2px; }
 [data-theme-base="light"] .node.widget:nth-child(3n+2) { border-radius: 2px 6px 3px 5px; }
 [data-theme-base="light"] .node.widget:nth-child(3n)   { border-radius: 6px 2px 5px 3px; }
+
+/* Making the first account. Without this the import screen was a dropdown
+ * with nothing in it and no way to fill it. */
+.addacct {
+  display: grid; gap: 0.4rem; margin-top: var(--s3);
+  padding-top: var(--s3); border-top: 1px solid var(--line);
+}
+.addacct .row { align-items: center; }
+.addacct .input[type="text"] { min-width: 12rem; flex: 1 1 12rem; }
