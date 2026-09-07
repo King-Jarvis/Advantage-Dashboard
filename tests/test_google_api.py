@@ -506,6 +506,10 @@ def test_the_first_fetch_asks_for_a_window_and_keeps_the_token(conn, acct,
     events, cursor = google_api.fetch_events(conn, acct)
     assert "timeMin" in seen and "timeMax" in seen
     assert seen.get("singleEvents") == "true"
+    # orderBy must not be sent: Google withholds nextSyncToken whenever it is,
+    # which silently turns every poll back into a full download. Verified
+    # against the live API, not inferred.
+    assert "orderBy" not in seen
     assert cursor == "TOKEN-1"
 
 

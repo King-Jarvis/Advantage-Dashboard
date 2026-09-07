@@ -277,7 +277,10 @@ def fetch_events(conn, account_id, days_back=DAYS_BACK, days_ahead=DAYS_AHEAD,
             "timeMin": (now - _dt.timedelta(days=days_back)).isoformat(),
             "timeMax": (now + _dt.timedelta(days=days_ahead)).isoformat(),
             "singleEvents": "true",
-            "orderBy": "startTime",
+            # No orderBy. Google withholds nextSyncToken whenever it is set,
+            # which quietly turns every poll back into a full year-wide
+            # download -- and it buys nothing here, because the database
+            # sorts on read and the grid sorts again per day.
         })
 
     out, page, next_cursor = [], None, None
