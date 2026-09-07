@@ -456,3 +456,21 @@ def test_a_deleted_event_leaves_the_grid_at_once(conn, acct):
     feeds.delete_event(conn, eid)
     assert feeds.events_between(conn, "2026-09-01T00:00:00",
                                 "2026-09-30T23:59:59") == []
+
+
+def test_a_tombstone_for_an_event_we_never_had_is_ignored(conn, acct):
+    """Google keeps cancelled events and re-serves them. Without this, every
+    deletion returns for ever as a hidden row."""
+    feeds.upsert_events(conn, acct, [ev("gone", "2026-09-10T09:00:00", deleted=1)])
+    assert conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 0
+
+
+def test_a_tombstone_for_an_event_we_do_have_still_deletes_it(conn, acct):
+    """The other half: a deletion made in Google must reach the agenda rather
+    than leaving a stale copy on it."""
+    feeds.upsert_events(conn, acct, [ev("real", "2026-09-10T09:00:00")])
+    assert len(feeds.events_between(conn, "2026-09-01T00:00:00",
+                                    "2026-09-30T23:59:59")) == 1
+    feeds.upsert_events(conn, acct, [ev("real", "2026-09-10T09:00:00", deleted=1)])
+    assert feeds.events_between(conn, "2026-09-01T00:00:00",
+                                "2026-09-30T23:59:59") == []

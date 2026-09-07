@@ -37,6 +37,13 @@ def upsert_events(conn, account_id, events):
         row = conn.execute(
             "SELECT id, dirty FROM events WHERE account_id=? AND source_uid=?",
             (account_id, uid)).fetchone()
+        # A tombstone for something we never had says nothing. Google keeps
+        # cancelled events and re-serves them, so without this every deletion
+        # comes back for ever as a hidden row. Storing it still matters when
+        # we *do* have the event -- that is how a deletion made elsewhere
+        # reaches the agenda instead of leaving a stale copy on it.
+        if e.get("deleted") and row is None:
+            continue
         if row and row["dirty"]:
             # A local edit is waiting to be pushed. The provider's copy is
             # older than what the operator asked for.
