@@ -14,6 +14,7 @@ import { el, money, moneyEl, mount } from "./dom.js";
 const state = {
   accounts: [], categories: [], coverage: null, pending: [],
   batch: null, rows: [], busy: false, error: "", note: "",
+  addingAccount: false,
 };
 
 function fmtRange(a, b) {
@@ -163,6 +164,9 @@ export async function importView(container, { onDone } = {}) {
         on_budget: newType.value !== "investment",
       });
       state.note = `Added ${name}.`;
+      // Close it: adding one is usually the whole errand, and a form left
+      // open reads as though it did not work.
+      state.addingAccount = false;
     } catch (e) {
       state.error = (e && e.message) || "Could not add that account.";
     }
@@ -170,15 +174,26 @@ export async function importView(container, { onDone } = {}) {
     return importView(container, { onDone });
   }
 
-  const addRow = el("div", { class: "addacct" },
+  // With no accounts the form is the only way forward, so it is simply there.
+  // With accounts it is an occasional errand, so it goes behind a button and
+  // out of the way of the thing you came to do.
+  const firstOne = state.accounts.length === 0;
+  const showForm = firstOne || state.addingAccount;
+
+  const addRow = !showForm ? null : el("div", { class: "addacct" },
     el("div", { class: "label",
-      text: state.accounts.length ? "Add another account" : "Add an account" }),
-    state.accounts.length ? null : el("div", { class: "hint",
+      text: firstOne ? "Add an account" : "Add another account" }),
+    firstOne ? el("div", { class: "hint",
       text: "A statement belongs to an account, so there has to be one "
-          + "before anything can be imported." }),
+          + "before anything can be imported." }) : null,
     el("div", { class: "row wrap" }, newName, newType,
-      el("button", { class: "btn", type: "button", text: "Add",
+      el("button", { class: "btn primary", type: "button", text: "Add",
                      onclick: addAccount })));
+
+  const addToggle = firstOne ? null : el("button", {
+    class: "btn", type: "button",
+    text: state.addingAccount ? "Cancel" : "Add another account",
+    onclick: () => { state.addingAccount = !state.addingAccount; render(); } });
   const file = el("input", { type: "file", class: "input",
                              accept: ".csv,.ofx,.qfx,.txt,text/csv",
                              "aria-label": "Statement file" });
@@ -221,11 +236,13 @@ export async function importView(container, { onDone } = {}) {
         state.error ? el("div", { class: "error", text: state.error }) : null,
         state.note ? el("div", { class: "pill ok", text: state.note }) : null,
         state.accounts.length
-          ? el("div", { class: "row wrap" },
+          ? el("div", { class: "row wrap uploadrow" },
               accountSel, file,
               el("button", { class: "btn primary", type: "button",
                              text: state.busy ? "Reading…" : "Read file",
-                             onclick: doUpload }))
+                             onclick: doUpload }),
+              // Pushed to the far end, away from the thing you came to do.
+              el("div", { class: "spacer" }), addToggle)
           : null,
         addRow,
         state.accounts.length
