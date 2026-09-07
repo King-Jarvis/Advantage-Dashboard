@@ -363,3 +363,97 @@ def test_a_transient_failure_still_retries(conn, acct, monkeypatch):
     conn.execute("UPDATE events SET dirty=1 WHERE id=?", (eid,))
     push.run(conn)
     assert conn.execute("SELECT dirty FROM events").fetchone()[0] == 1
+
+
+# ── giving up ─────────────────────────────────────────────────────────────
+def test_a_repeated_failure_is_eventually_abandoned(conn, acct, monkeypatch):
+    """Enumerating every error Google might return permanently is a losing
+    game. Counting attempts catches the ones nobody predicted."""
+    def boom(*a, **k):
+        raise google_api.GoogleError("something nobody anticipated")
+    monkeypatch.setattr(google_api, "_send_retrying", boom)
+
+    mid = a_message(conn, acct)
+    feeds.set_message(conn, mid, archived=1)
+
+    for n in range(push.MAX_ATTEMPTS - 1):
+        push.run(conn)
+        r = conn.execute("SELECT dirty, push_attempts FROM messages").fetchone()
+        assert r["dirty"] == 1, "gave up too early, after %d" % (n + 1)
+        assert r["push_attempts"] == n + 1
+
+    push.run(conn)
+    r = conn.execute("SELECT dirty, push_error FROM messages").fetchone()
+    assert r["dirty"] == 0, "still retrying past the limit"
+    assert "gave up" in r["push_error"]
+
+
+def test_an_abandoned_edit_stays_visible(conn, acct, monkeypatch):
+    """Silently dropping one is the same as losing it."""
+    monkeypatch.setattr(google_api, "_send_retrying",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            google_api.Refused("no")))
+    mid = a_message(conn, acct)
+    feeds.set_message(conn, mid, archived=1)
+    push.run(conn)
+    assert push.pending_count(conn) == 0
+    assert push.abandoned_count(conn) == 1
+    assert feeds.unsent(conn)[0]["kind"] == "mail"
+
+
+def test_a_new_edit_gets_a_fresh_budget(conn, acct, monkeypatch):
+    """The last failure was about the last edit. Holding it against this one
+    would abandon a change that has not been tried even once."""
+    def boom(*a, **k):
+        raise google_api.GoogleError("wobble")
+    monkeypatch.setattr(google_api, "_send_retrying", boom)
+
+    mid = a_message(conn, acct)
+    feeds.set_message(conn, mid, archived=1)
+    for _ in range(push.MAX_ATTEMPTS - 1):
+        push.run(conn)
+    assert conn.execute("SELECT push_attempts FROM messages").fetchone()[0] \
+        == push.MAX_ATTEMPTS - 1
+
+    feeds.set_message(conn, mid, is_starred=1)
+    r = conn.execute("SELECT push_attempts, dirty FROM messages").fetchone()
+    assert r["push_attempts"] == 0 and r["dirty"] == 1
+
+
+def test_success_clears_the_count(conn, acct, monkeypatch):
+    calls = {"n": 0}
+
+    def flaky(conn_, aid, url, method="POST", payload=None, etag=None):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise google_api.GoogleError("wobble")
+        return {}
+
+    monkeypatch.setattr(google_api, "_send_retrying", flaky)
+    mid = a_message(conn, acct)
+    feeds.set_message(conn, mid, archived=1)
+    for _ in range(3):
+        push.run(conn)
+    r = conn.execute("SELECT dirty, push_attempts, push_error FROM messages").fetchone()
+    assert r["dirty"] == 0 and r["push_attempts"] == 0 and r["push_error"] == ""
+
+
+def test_a_write_to_something_deleted_gives_up_at_once(conn, acct, monkeypatch):
+    """Retrying a write against something that no longer exists cannot start
+    working, so it does not wait for the count."""
+    import io
+    import urllib.error
+
+    # Patched at the socket, not at _send: the 404 has to travel through the
+    # real error handling, which is the thing under test.
+    def gone(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {},
+                                     io.BytesIO(b"{}"))
+
+    monkeypatch.setattr("urllib.request.urlopen", gone)
+    mid = a_message(conn, acct)
+    feeds.set_message(conn, mid, archived=1)
+    push.run(conn)
+    r = conn.execute("SELECT dirty, push_attempts, push_error FROM messages").fetchone()
+    assert r["dirty"] == 0 and r["push_attempts"] == 0
+    assert "no longer in Google" in r["push_error"]

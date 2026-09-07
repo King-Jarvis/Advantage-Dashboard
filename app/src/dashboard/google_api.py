@@ -241,6 +241,14 @@ def _send(url, token, method="POST", payload=None, etag=None):
             raise _Unauthorized() from None
         if e.code == 412:
             raise Conflict() from None
+        if e.code in (404, 410):
+            # Whatever we were changing is not there any more. Retrying a
+            # write against something that no longer exists cannot start
+            # working. Only on a write: a 410 on a read is a stale sync
+            # token, which does mean try again.
+            raise Refused(
+                "that is no longer in Google -- it was probably deleted "
+                "there, so the change here could not be applied") from None
         if e.code == 400:
             body = b""
             try:

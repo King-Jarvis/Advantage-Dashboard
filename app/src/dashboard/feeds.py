@@ -265,6 +265,7 @@ def update_event(conn, event_id, **fields):
     conn.execute(
         "UPDATE events SET title=?, description=?, location=?, starts_at=?,"
         " ends_at=?, all_day=?, updated_at=?, dirty=1, push_error='',"
+        " push_attempts=0,"
         " recurrence=?, reminder_minutes=? WHERE id=?",
         (str(merged.get("title") or "").strip()[:500],
          str(merged.get("description") or "")[:5000],
@@ -285,8 +286,8 @@ def delete_event(conn, event_id):
     row = conn.execute("SELECT id FROM events WHERE id=?", (event_id,)).fetchone()
     if row is None:
         raise KeyError(event_id)
-    conn.execute("UPDATE events SET pending_delete=1, dirty=1, push_error=''"
-                 " WHERE id=?", (event_id,))
+    conn.execute("UPDATE events SET pending_delete=1, dirty=1, push_error='',"
+                 " push_attempts=0 WHERE id=?", (event_id,))
     conn.commit()
 
 
@@ -405,7 +406,10 @@ def set_message(conn, message_id, **fields):
     values = [int(v) if isinstance(v, bool) else v for v in fields.values()]
     sets = ", ".join("%s=?" % k for k in fields)
     if fields.keys() & PUSHABLE:
-        sets += ", dirty=1, push_error=''"
+        # A fresh edit gets a fresh budget of attempts: the last failure was
+        # about the last edit, and holding it against this one would abandon
+        # a change that has not been tried even once.
+        sets += ", dirty=1, push_error='', push_attempts=0"
     conn.execute("UPDATE messages SET %s WHERE id=?" % sets,
                  [*values, message_id])
     conn.commit()
@@ -451,6 +455,22 @@ def _blocks(raw):
 
 
 # ── sync bookkeeping ──────────────────────────────────────────────────────
+def unsent(conn, limit=20):
+    """Edits that never reached the provider, with what each one said.
+
+    An abandoned change is invisible otherwise: the screen shows what you
+    asked for and the provider shows something else, and nothing connects the
+    two. This is what lets the interface say so.
+    """
+    out = []
+    for table, label in (("messages", "mail"), ("events", "calendar")):
+        for r in conn.execute(
+                "SELECT id, push_error FROM %s"
+                " WHERE dirty=0 AND push_error<>'' LIMIT ?" % table, (limit,)):
+            out.append({"kind": label, "id": r["id"], "why": r["push_error"]})
+    return out
+
+
 def sync_cursor(conn, source):
     """Where this feed got to last time, or None to start from the beginning."""
     row = conn.execute("SELECT cursor FROM sync_state WHERE source=?",

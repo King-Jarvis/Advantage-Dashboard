@@ -28,6 +28,12 @@ CAL_EVENTS = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
 
 LOCAL_PREFIX = "local:"
 
+# After this many failures a row stops being retried. Chosen to ride out a
+# flaky connection or a brief outage and still give up the same day, rather
+# than grinding against something that will never work for as long as the
+# service runs.
+MAX_ATTEMPTS = 5
+
 
 def _now():
     return time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -177,6 +183,19 @@ def push_event(conn, account_id, row):
 
 
 # ── the run ───────────────────────────────────────────────────────────────
+def _give_up(conn, table, row, why):
+    """Stop trying, and say why.
+
+    dirty is cleared so the queue drains and the next pull can restore what
+    the provider actually holds -- an edit that cannot be sent and is not
+    abandoned leaves the two copies disagreeing for good. push_error survives
+    so the row can still explain itself in the interface.
+    """
+    conn.execute(
+        "UPDATE %s SET dirty=0, push_error=?, push_attempts=0 WHERE id=?"
+        % table, (why[:300], row["id"]))
+
+
 def _pending(conn, table, account_id):
     return conn.execute(
         "SELECT * FROM %s WHERE account_id=? AND dirty=1"
@@ -202,15 +221,9 @@ def run(conn, account_id=None):
                 try:
                     fn(conn, aid, row)
                 except google_api.Refused as e:
-                    # Permanent. Clearing dirty is the point: retrying for
-                    # ever would keep a queue that never drains, and leaving
-                    # the local edit in place would mean the two copies
-                    # disagree for good. The next pull restores what Google
-                    # actually holds, which is the honest resolution.
+                    # Known permanent: no point counting to five first.
                     failed += 1
-                    conn.execute(
-                        "UPDATE %s SET dirty=0, push_error=? WHERE id=?"
-                        % table, (str(e)[:300], row["id"]))
+                    _give_up(conn, table, row, str(e))
                 except google_api.Conflict:
                     conflicts += 1
                     conn.execute(
@@ -219,15 +232,26 @@ def run(conn, account_id=None):
                          "your version has not been sent", row["id"]))
                 except Exception as e:
                     failed += 1
-                    conn.execute(
-                        "UPDATE %s SET push_error=? WHERE id=?" % table,
-                        (str(e)[:300], row["id"]))
+                    tries = (row["push_attempts"] or 0) + 1
+                    if tries >= MAX_ATTEMPTS:
+                        # Whatever this is, it is not getting better. Giving up
+                        # is what stops a queue grinding for ever against a
+                        # request that cannot succeed -- and the failure stays
+                        # visible rather than being retried into silence.
+                        _give_up(conn, table, row,
+                                 "%s (gave up after %d attempts)"
+                                 % (str(e)[:240], tries))
+                    else:
+                        conn.execute(
+                            "UPDATE %s SET push_error=?, push_attempts=?"
+                            " WHERE id=?" % table,
+                            (str(e)[:300], tries, row["id"]))
                 else:
                     pushed += 1
                     # Only now: the edit has actually landed.
                     conn.execute(
-                        "UPDATE %s SET dirty=0, push_error='' WHERE id=?"
-                        % table, (row["id"],))
+                        "UPDATE %s SET dirty=0, push_error='', push_attempts=0"
+                        " WHERE id=?" % table, (row["id"],))
                 conn.commit()
         results.append({"account": account.get("email", ""), "pushed": pushed,
                         "failed": failed, "conflicts": conflicts})
@@ -243,3 +267,11 @@ def pending_count(conn):
     return sum(conn.execute(
         "SELECT COUNT(*) FROM %s WHERE dirty=1" % t).fetchone()[0]
         for t in ("messages", "events"))
+
+
+def abandoned_count(conn):
+    """Edits that were given up on. Worth surfacing: silently dropping one
+    is the same as losing it."""
+    return sum(conn.execute(
+        "SELECT COUNT(*) FROM %s WHERE dirty=0 AND push_error<>''" % t
+    ).fetchone()[0] for t in ("messages", "events"))

@@ -11,7 +11,7 @@ operation is not optional.
 
 import json
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 # Foreign keys are off by default in SQLite and must be enabled per
 # connection, not once per database. Enforced in storage.connect().
@@ -373,6 +373,11 @@ ADDED_COLUMNS = [
     # contacts are 'birthday' and cannot be changed through the API at all,
     # so the interface needs to know before offering to change one.
     ("events", "event_type", "TEXT NOT NULL DEFAULT 'default'"),
+    # How many times a push of this row has failed. Enumerating every error
+    # Google might return permanently is a losing game; counting attempts
+    # catches the ones nobody predicted.
+    ("events", "push_attempts", "INTEGER NOT NULL DEFAULT 0"),
+    ("messages", "push_attempts", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 

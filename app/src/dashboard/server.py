@@ -25,6 +25,7 @@ from . import (
     firstrun,
     google_api,
     imageproxy,
+    push,
     scheduler,
     security,
     settings,
@@ -555,7 +556,13 @@ class Handler(BaseHTTPRequestHandler):
     def api_syncst(self, conn, session):
         """Per-source freshness, so a stale feed is visible rather than quiet."""
         self.json_out({"sources": feeds.sync_status(conn),
-                       "accounts": settings.list_google_accounts(conn)})
+                       "accounts": settings.list_google_accounts(conn),
+                       # Silently dropping an edit is the same as losing it,
+                       # so both numbers are reported: what is still queued,
+                       # and what was given up on.
+                       "pending": push.pending_count(conn),
+                       "abandoned": push.abandoned_count(conn),
+                       "unsent": feeds.unsent(conn)})
 
     def api_msgbody(self, conn, session, message_id):
         """One message, as text and as blocks. Fetched once, then kept."""
