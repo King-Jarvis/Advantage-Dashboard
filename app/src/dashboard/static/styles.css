@@ -1437,3 +1437,12 @@ textarea.input { resize: vertical; min-height: 5.5rem; line-height: 1.45; }
   .lrow .input { flex: 1 1 100%; }
   .lgroup, .lcat { padding-left: var(--s2); }
 }
+
+/* Imported files: a record rather than work waiting, so it stays folded until
+ * something has gone in wrong. */
+.impfold > summary {
+  cursor: pointer; padding: 0.35em 0; color: var(--text-2);
+  font-size: var(--t-label);
+}
+.impfold > summary:hover { color: var(--text); }
+.impfold[open] > summary { margin-bottom: var(--s2); }

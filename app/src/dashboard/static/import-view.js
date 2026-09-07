@@ -17,6 +17,7 @@ const state = {
   addingAccount: false,
   unfiled: [], allCats: [], unfiledBand: "in", showFiled: false,
   tracking: [], transfers: [], candidates: [], history: [],
+  historyOpen: false,
 };
 
 function fmtRange(a, b) {
@@ -600,12 +601,24 @@ export async function importView(container, { onDone } = {}) {
                  ? `, ${state.candidates.length} suggested` : "") })),
       el("div", { class: "node-body" }, transfersPanel(refresh)));
 
+    // Folded away: this is a record, not work waiting. It is opened when
+    // something has gone in wrong, which is rare, and the rest of the time it
+    // is a list of files you already dealt with.
+    const histDetails = el("details", { class: "impfold" },
+      el("summary", {},
+        el("span", { text: "Imported files" }),
+        el("span", { class: "hint",
+          text: ` · ${state.history.filter((b) => b.state !== "review").length}`
+              + " · undo one here" })),
+      historyPanel(refresh));
+    if (state.historyOpen) histDetails.setAttribute("open", "");
+    histDetails.addEventListener("toggle", () => {
+      // Remembered, or undoing an import closes the list it was undone from.
+      state.historyOpen = histDetails.open;
+    });
+
     const histCard = el("section", { class: "node", dataset: { kind: "budget" } },
-      el("header", { class: "node-head" },
-        el("span", { class: "node-title", text: "Imported files" }),
-        el("div", { class: "spacer" }),
-        el("span", { class: "label", text: "most recent first" })),
-      el("div", { class: "node-body" }, historyPanel(refresh)));
+      el("div", { class: "node-body" }, histDetails));
 
     parts.push(unfiledCard, xferCard, histCard, coverageCard);
     mount(container, ...parts);
