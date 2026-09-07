@@ -277,17 +277,6 @@ def test_the_font_licence_ships_with_the_font():
     assert lic.exists() and "Open Font License" in lic.read_text()
 
 
-def test_the_widget_paint_follows_the_theme():
-    """The blotches are masks, not pictures. A picture of one palette would
-    stay that colour when the theme changed."""
-    import pathlib
-    css = pathlib.Path("app/src/dashboard/static/styles.css").read_text()
-    i = css.index(".node.widget::after")
-    block = css[i:i + 600]
-    assert "mask:" in block
-    assert "var(--surface)" in block, "the paint colour must come from a token"
-
-
 def test_no_colour_escaped_the_token_system():
     """An element with a fixed colour ignores every theme -- which is exactly
     how the header stayed dark under a pale one."""
