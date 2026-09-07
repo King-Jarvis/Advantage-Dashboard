@@ -272,3 +272,64 @@ def test_editing_to_a_float_amount_is_refused(conn, book):
 def test_balance_of_an_unknown_category_raises(conn, book):
     with pytest.raises(KeyError):
         ledger.category_balance(conn, "no-such-category", "2026-01")
+
+
+# ── deleting a category ───────────────────────────────────────────────────
+def test_unused_category_is_deleted_outright(conn, book):
+    cid = ledger.create_category(conn, book_group(conn), "Scratch")
+    assert ledger.delete_category(conn, cid) == "deleted"
+    assert not any(c["id"] == cid
+                   for c in ledger.list_categories(conn, include_hidden=True))
+
+
+def test_category_with_live_spending_is_hidden_not_deleted(conn, book):
+    ledger.add_transaction(conn, book["checking"], "2026-01-05", -20_00,
+                           "Shop", book["fuel"])
+    assert ledger.delete_category(conn, book["fuel"]) == "hidden"
+    kept = [c for c in ledger.list_categories(conn, include_hidden=True)
+            if c["id"] == book["fuel"]]
+    assert kept and kept[0]["hidden"] == 1
+
+
+def test_soft_deleted_transactions_do_not_block_deleting_a_category(conn, book):
+    """A row that is already gone from every view must not pin the category.
+
+    Nothing reads a deleted transaction's category, so keeping the reference
+    protects no history -- it only makes the foreign key refuse the delete,
+    and the screen cannot explain why.
+    """
+    tid = ledger.add_transaction(conn, book["checking"], "2026-01-05", -20_00,
+                                 "Shop", book["fuel"])
+    ledger.delete_transaction(conn, tid)
+    assert ledger.delete_category(conn, book["fuel"]) == "deleted"
+    assert conn.execute("SELECT category_id FROM transactions WHERE id=?",
+                        (tid,)).fetchone()["category_id"] is None
+
+
+def test_import_staging_rows_do_not_block_deleting_a_category(conn, book):
+    conn.execute("INSERT INTO import_batches (id, account_id, filename,"
+                 " uploaded_at) VALUES ('b1',?,'stmt.qfx','2026-01-01T00:00:00Z')",
+                 (book["checking"],))
+    conn.execute(
+        "INSERT INTO import_rows (id, batch_id, line_no, date, amount_cents,"
+        " payee, category_id) VALUES ('r1','b1',0,'2026-01-05',-2000,'Shop',?)",
+        (book["fuel"],))
+    conn.commit()
+    assert ledger.delete_category(conn, book["fuel"]) == "deleted"
+    assert conn.execute("SELECT category_id FROM import_rows WHERE id='r1'"
+                        ).fetchone()["category_id"] is None
+
+
+def test_zeroing_a_budget_lets_a_spent_out_category_go(conn, book):
+    """Budgeting to a category should not make it permanent once emptied."""
+    ledger.set_budget(conn, "2026-01", book["fuel"], 50_00)
+    assert ledger.delete_category(conn, book["fuel"]) == "hidden"
+    ledger.update_category(conn, book["fuel"], hidden=False)
+    ledger.set_budget(conn, "2026-01", book["fuel"], 0)
+    assert ledger.delete_category(conn, book["fuel"]) == "deleted"
+    assert conn.execute("SELECT COUNT(*) c FROM budget_months WHERE"
+                        " category_id=?", (book["fuel"],)).fetchone()["c"] == 0
+
+
+def book_group(conn):
+    return conn.execute("SELECT id FROM category_groups LIMIT 1").fetchone()["id"]

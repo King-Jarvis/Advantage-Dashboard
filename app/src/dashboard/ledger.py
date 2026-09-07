@@ -129,6 +129,17 @@ def delete_category(conn, category_id):
     if used or budgeted:
         update_category(conn, category_id, hidden=True)
         return "hidden"
+
+    # Two other tables point here, and neither is history anyone reads: a
+    # soft-deleted transaction is already gone from every view, and an
+    # import row is staging for a file that has been committed or reverted
+    # long since. Left alone they do not protect anything -- they just make
+    # the foreign key refuse the delete, so a category with no live use
+    # becomes undeletable for reasons the screen cannot explain.
+    conn.execute("UPDATE transactions SET category_id=NULL"
+                 " WHERE category_id=? AND deleted=1", (category_id,))
+    conn.execute("UPDATE import_rows SET category_id=NULL WHERE category_id=?",
+                 (category_id,))
     conn.execute("DELETE FROM budget_months WHERE category_id=?", (category_id,))
     conn.execute("DELETE FROM categories WHERE id=?", (category_id,))
     _audit(conn, "delete", "category", category_id)
