@@ -121,15 +121,22 @@ def _ask_model(payees, category_names, model=None, timeout=TIMEOUT):
         return {}
     model = model or os.environ.get("CLASSIFY_MODEL", "claude-haiku-4-5")
 
+    # One batch per call. The caller does the chunking; this slice is
+    # a backstop so a careless caller cannot send a thousand at once.
+    payees = list(payees)[:MAX_PAYEES_PER_CALL]
     body = {
         "model": model,
-        "max_tokens": 1024,
+        # Room for an answer about every name sent. Too small and the
+        # JSON is cut off mid-object, which parses as a shorter answer
+        # rather than as an error -- so the shortfall looks like the
+        # model declining to guess.
+        "max_tokens": 200 + 40 * len(payees),
         "system": _INSTRUCTIONS,
         "messages": [{
             "role": "user",
             "content": ("CATEGORIES:\n%s\n\n<merchants>\n%s\n</merchants>"
                         % ("\n".join(category_names),
-                           "\n".join(payees[:MAX_PAYEES_PER_CALL]))),
+                           "\n".join(payees))),
         }],
     }
     req = urllib.request.Request(
@@ -201,7 +208,14 @@ def suggest(conn, payees, use_model=None):
     if use_model is None:
         use_model = os.environ.get("ENABLE_LLM_CATEGORIES", "").lower() == "true"
     if unknown and use_model and cats:
-        answers = _ask_model(sorted(unknown), sorted(cats.values()))
+        # Chunked, not truncated. This handed the whole list to a function
+        # that quietly kept the first forty, so on a real statement most
+        # merchants were never asked about at all.
+        names = sorted(cats.values())
+        todo = sorted(unknown)
+        answers = {}
+        for i in range(0, len(todo), MAX_PAYEES_PER_CALL):
+            answers.update(_ask_model(todo[i:i + MAX_PAYEES_PER_CALL], names))
         for norm, name in answers.items():
             cid = by_name.get(name.lower())
             if not cid:

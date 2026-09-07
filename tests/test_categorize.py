@@ -251,3 +251,60 @@ def test_apply_everywhere_reaches_rows_no_batch_owns(conn, book, monkeypatch):
 def test_apply_everywhere_on_an_empty_ledger_is_harmless(conn, book):
     got = categorize.apply_everywhere(conn, use_model=False)
     assert got["changed"] == 0 and got["rows"] == 0
+
+
+def test_every_merchant_is_asked_about_not_just_the_first_forty(conn, book,
+                                                                monkeypatch):
+    """_ask_model kept payees[:40] and dropped the rest silently, so on a real
+    statement most merchants were never sent and the shortfall looked like the
+    model declining to answer."""
+    sent = []
+
+    def fake(payees, names, model=None, timeout=None):
+        sent.extend(payees)
+        return {p: "Groceries" for p in payees}
+
+    monkeypatch.setattr(categorize, "_ask_model", fake)
+    many = ["SHOP %s%s LTD" % (chr(97 + i // 26), chr(97 + i % 26))
+            for i in range(95)]
+    out = categorize.suggest(conn, many, use_model=True)
+    assert len(sent) == 95, "only %d of 95 merchants were sent" % len(sent)
+    assert len(out) == 95, "only %d of 95 got an answer" % len(out)
+
+
+def test_the_calls_are_chunked(conn, book, monkeypatch):
+    calls = []
+
+    def fake(payees, names, model=None, timeout=None):
+        calls.append(len(payees))
+        return {}
+
+    monkeypatch.setattr(categorize, "_ask_model", fake)
+    categorize.suggest(
+        conn, ["SHOP %s%s LTD" % (chr(97 + i // 26), chr(97 + i % 26))
+               for i in range(95)], use_model=True)
+    assert len(calls) == 3, "expected three calls, got %r" % (calls,)
+    assert max(calls) <= categorize.MAX_PAYEES_PER_CALL
+
+
+def test_the_token_budget_scales_with_the_batch(monkeypatch):
+    """A budget too small cuts the JSON off mid-object, which parses as a
+    shorter answer rather than as an error."""
+    seen = {}
+
+    class R:
+        def read(self): return b'{"content":[{"type":"text","text":"{}"}]}'
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake_open(req, timeout=None):
+        import json as j
+        seen.update(j.loads(req.data.decode()))
+        return R()
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setattr("urllib.request.urlopen", fake_open)
+    categorize._ask_model(["a", "b", "c"], ["Groceries"])
+    small = seen["max_tokens"]
+    categorize._ask_model(["m%d" % i for i in range(40)], ["Groceries"])
+    assert seen["max_tokens"] > small
