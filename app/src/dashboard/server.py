@@ -571,9 +571,22 @@ class Handler(BaseHTTPRequestHandler):
             " JOIN category_groups g ON g.id = c.group_id"
             " WHERE c.is_income=0 AND c.hidden=0 ORDER BY g.sort, c.sort"
         ).fetchall()
+        # Income categories are not budgeted -- you budget from income, not to
+        # it -- but they must still be visible. A category that vanishes the
+        # moment it is marked as income looks deleted, and the money it
+        # carries looks lost.
+        income = conn.execute(
+            "SELECT c.id, c.name, g.name gname FROM categories c"
+            " JOIN category_groups g ON g.id = c.group_id"
+            " WHERE c.is_income=1 AND c.hidden=0 ORDER BY g.sort, c.sort"
+        ).fetchall()
         self.json_out({
             "month": month,
             "to_be_budgeted_cents": ledger.to_be_budgeted(conn, month),
+            "income": [{
+                "id": c["id"], "name": c["name"], "group": c["gname"],
+                "activity_cents": ledger.category_activity(conn, c["id"], month),
+            } for c in income],
             "categories": [{
                 "id": c["id"], "name": c["name"], "group": c["gname"],
                 "budgeted_cents": ledger.get_budget(conn, month, c["id"]),

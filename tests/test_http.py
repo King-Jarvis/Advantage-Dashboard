@@ -1987,3 +1987,28 @@ def test_switching_does_not_disturb_the_transactions(live):
                      (cid,)).fetchone()[0]
     conn.close()
     assert n == 3
+
+
+def test_the_budget_lists_income_separately(live):
+    """It is not budgeted into an envelope, but a category that vanishes on
+    being marked income looks deleted and its money looks lost."""
+    from dashboard import ledger
+    from dashboard import storage as st
+    conn = st.connect()
+    ginc = ledger.create_category_group(conn, "Money", is_income=True)
+    gexp = ledger.create_category_group(conn, "Everyday")
+    pay = ledger.create_category(conn, ginc, "Paycheck", is_income=True)
+    ledger.create_category(conn, gexp, "Groceries")
+    acct = ledger.create_account(conn, "Checking")
+    ledger.add_transaction(conn, acct, "2026-08-05", 250000, "PAYROLL", pay)
+    conn.close()
+
+    cookie, _ = login(live)
+    status, _, b = call(live, "GET", "/api/view/budget?month=2026-08",
+                        headers={"Cookie": cookie})
+    assert status == 200, b
+    assert [c["name"] for c in b["categories"]] == ["Groceries"], \
+        "income should not have an envelope"
+    assert [c["name"] for c in b["income"]] == ["Paycheck"]
+    assert b["income"][0]["activity_cents"] == 250000
+    assert b["to_be_budgeted_cents"] == 250000

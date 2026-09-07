@@ -1364,3 +1364,19 @@ textarea.input { resize: vertical; min-height: 5.5rem; line-height: 1.45; }
 .splitrem.ok { color: var(--ok); }
 .splitrem.warn { color: var(--warn); }
 .splitbox .error:empty { display: none; }
+
+/* Income: listed, not budgeted. Without this a category vanishes the moment
+ * it is marked as income and the money it carries looks lost. */
+.incomebox {
+  margin: var(--s3) 0; padding: var(--s3);
+  border: 1px solid var(--line); border-left: 3px solid var(--ok);
+  border-radius: var(--r-sm); background: var(--surface);
+}
+.incomerow {
+  display: flex; align-items: baseline; gap: var(--s3);
+  padding: 0.25rem 0; border-top: 1px solid var(--line);
+}
+.incomerow:first-of-type { border-top: 0; }
+.incomeamt, .incometotal { font-variant-numeric: tabular-nums; }
+.incometotal { font-weight: 600; }
+.incomebox .hint { margin-top: var(--s2); }

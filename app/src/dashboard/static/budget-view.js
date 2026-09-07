@@ -86,6 +86,7 @@ function header(onMonth, refresh) {
         el("span", { class: `pill ${tone}`, text: says })),
       state.error ? el("div", { class: "error", text: state.error }) : null,
       state.adding ? addCategoryForm(refresh) : null,
+      incomeSection(state.data.income, tbb),
       // What the row controls do, said once rather than hidden in tooltips --
       // a title attribute shows nothing at all on a touch screen, which is
       // where this is read.
@@ -196,6 +197,29 @@ function addCategoryForm(refresh) {
                      onclick: () => { state.adding = false; state.error = ""; refresh(true); } })),
     el("div", { class: "hint",
       text: "The importer's classifier can use a new category immediately." }));
+}
+
+/* Income, shown but not budgeted.
+ *
+ * You budget from income, not to it, so these have no envelope and no amount
+ * box. But a category that disappears the moment it is marked as income looks
+ * deleted, and the money it carries looks lost -- so it is listed here, with
+ * what arrived, and a line saying where that money went.
+ */
+function incomeSection(income, tbb) {
+  if (!income || !income.length) return null;
+  const total = income.reduce((n, c) => n + c.activity_cents, 0);
+  return el("div", { class: "incomebox" },
+    el("div", { class: "row" },
+      el("span", { class: "label", text: "money in this month" }),
+      el("div", { class: "spacer" }),
+      moneyEl(total, "incometotal")),
+    ...income.map((c) => el("div", { class: "incomerow" },
+      el("span", { class: "grow", text: c.name }),
+      moneyEl(c.activity_cents, "incomeamt"))),
+    el("div", { class: "hint",
+      text: "Income is not budgeted into an envelope. It is what there is to "
+          + "budget with, and it lands in the figure at the top." }));
 }
 
 /* ── one category ───────────────────────────────────────────────────────── */
