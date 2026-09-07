@@ -352,3 +352,109 @@ def test_an_unknown_category_is_refused(conn, book):
                                  "SHELL 4471", book["fuel"])
     with pytest.raises(KeyError):
         ledger.split_transaction(conn, txn, [("0" * 32, -5000)])
+
+
+# ── transfers ─────────────────────────────────────────────────────────────
+def test_two_halves_are_matched_as_a_candidate(conn, book):
+    """A transfer usually clears the sending account before the receiving
+    one, so requiring the same date would miss most of them."""
+    ledger.add_transaction(conn, book["checking"], "2026-08-01", -50000,
+                           "Transfer to savings")
+    ledger.add_transaction(conn, book["savings"], "2026-08-02", 50000,
+                           "Transfer from checking")
+    c = ledger.transfer_candidates(conn)
+    assert len(c) == 1
+    assert c[0]["amount_cents"] == 50000 and c[0]["days_apart"] == 1
+
+
+def test_nothing_is_linked_automatically(conn, book):
+    """Two equal and opposite amounts in one week can be a coincidence.
+    Merging them silently would delete two real transactions and invent a
+    movement that never happened."""
+    ledger.add_transaction(conn, book["checking"], "2026-08-01", -50000, "A")
+    ledger.add_transaction(conn, book["savings"], "2026-08-02", 50000, "B")
+    ledger.transfer_candidates(conn)
+    n = conn.execute("SELECT COUNT(*) FROM transactions"
+                     " WHERE transfer_id IS NOT NULL").fetchone()[0]
+    assert n == 0
+
+
+def test_dates_too_far_apart_are_not_matched(conn, book):
+    ledger.add_transaction(conn, book["checking"], "2026-08-01", -50000, "A")
+    ledger.add_transaction(conn, book["savings"], "2026-08-20", 50000, "B")
+    assert ledger.transfer_candidates(conn) == []
+
+
+def test_the_same_account_is_never_a_match(conn, book):
+    ledger.add_transaction(conn, book["checking"], "2026-08-01", -50000, "A")
+    ledger.add_transaction(conn, book["checking"], "2026-08-01", 50000, "B")
+    assert ledger.transfer_candidates(conn) == []
+
+
+def test_linking_clears_the_categories(conn, book):
+    """A transfer is not spending and not income. Counting it as either is how
+    a budget comes to believe a payday happened every time money crossed
+    between two of your own accounts."""
+    a = ledger.add_transaction(conn, book["checking"], "2026-08-01", -50000,
+                               "Out", book["groceries"])
+    b = ledger.add_transaction(conn, book["savings"], "2026-08-02", 50000,
+                               "In", book["salary"])
+    ledger.link_transfer(conn, a, b)
+    for tid in (a, b):
+        r = conn.execute("SELECT category_id, transfer_id FROM transactions"
+                         " WHERE id=?", (tid,)).fetchone()
+        assert r["category_id"] is None and r["transfer_id"]
+
+
+def test_a_linked_transfer_leaves_the_budget_alone(conn, book):
+    before = ledger.to_be_budgeted(conn, "2026-08")
+    a = ledger.add_transaction(conn, book["checking"], "2026-08-01", -50000, "Out")
+    b = ledger.add_transaction(conn, book["savings"], "2026-08-02", 50000, "In")
+    ledger.link_transfer(conn, a, b)
+    assert ledger.to_be_budgeted(conn, "2026-08") == before
+
+
+def test_halves_that_do_not_cancel_are_refused(conn, book):
+    a = ledger.add_transaction(conn, book["checking"], "2026-08-01", -50000, "Out")
+    b = ledger.add_transaction(conn, book["savings"], "2026-08-02", 40000, "In")
+    with pytest.raises(ValueError, match="cancel"):
+        ledger.link_transfer(conn, a, b)
+
+
+def test_a_transfer_says_which_way_it_went(conn, book):
+    a = ledger.add_transaction(conn, book["checking"], "2026-08-01", -50000, "Out")
+    b = ledger.add_transaction(conn, book["savings"], "2026-08-02", 50000, "In")
+    ledger.link_transfer(conn, a, b)
+    t = ledger.transfers(conn)[0]
+    assert t["from_account"] == "Checking" and t["to_account"] == "Savings"
+    assert t["amount_cents"] == 50000
+
+
+def test_a_transfer_can_be_unlinked(conn, book):
+    a = ledger.add_transaction(conn, book["checking"], "2026-08-01", -50000, "Out")
+    b = ledger.add_transaction(conn, book["savings"], "2026-08-02", 50000, "In")
+    ledger.link_transfer(conn, a, b)
+    ledger.unlink_transfer(conn, a)
+    assert ledger.transfers(conn) == []
+    assert conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0] == 2
+
+
+def test_money_can_be_sent_to_an_untracked_account(conn, book):
+    """With one statement imported there is no second row to link to, so the
+    matching half is written into the account it went to."""
+    tracking = ledger.create_account(conn, "Venmo", on_budget=False)
+    txn = ledger.add_transaction(conn, book["checking"], "2026-08-01", -21100,
+                                 "Transfer to Venmo")
+    ledger.send_to_account(conn, txn, tracking)
+    t = ledger.transfers(conn)[0]
+    assert t["to_account"] == "Venmo" and t["leaves_budget"] is True
+    assert ledger.account_balance(conn, tracking) == 21100
+
+
+def test_sending_to_a_budgeted_account_is_refused(conn, book):
+    """Inventing a half there would sit alongside the real one when that
+    account's statement arrives, and it would be double-counted for good."""
+    txn = ledger.add_transaction(conn, book["checking"], "2026-08-01", -50000,
+                                 "Transfer")
+    with pytest.raises(ValueError, match="import its statement"):
+        ledger.send_to_account(conn, txn, book["savings"])

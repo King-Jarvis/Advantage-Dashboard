@@ -2012,3 +2012,81 @@ def test_the_budget_lists_income_separately(live):
     assert [c["name"] for c in b["income"]] == ["Paycheck"]
     assert b["income"][0]["activity_cents"] == 250000
     assert b["to_be_budgeted_cents"] == 250000
+
+
+# ── transfers ─────────────────────────────────────────────────────────────
+def test_a_movement_can_be_recorded_against_an_untracked_account(live):
+    """One statement imported means no second row to link to. The matching
+    half is written where the money went, so it leaves the budget without
+    being counted as spending."""
+    from dashboard import ledger
+    from dashboard import storage as st
+    conn = st.connect()
+    chk = ledger.create_account(conn, "Checking")
+    venmo = ledger.create_account(conn, "Venmo", on_budget=False)
+    for i in range(3):
+        ledger.add_transaction(conn, chk, "2026-08-0%d" % (i + 1), -21100,
+                               "Transfer to Venmo 4471")
+    conn.close()
+
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    _, _, avail = call(live, "GET", "/api/view/unfiled",
+                       headers={"Cookie": cookie})
+    assert [a["name"] for a in avail["tracking"]] == ["Venmo"], \
+        "budgeted accounts must not be offered as transfer destinations"
+
+    _, _, r = call(live, "POST", "/api/edit/by-payee",
+                   {"payee_key": "transfer to venmo", "account_id": venmo},
+                   headers=h)
+    assert r["filed"] == 3 and r["as"] == "transfer"
+
+    _, _, t = call(live, "GET", "/api/view/transfers", headers={"Cookie": cookie})
+    assert len(t["transfers"]) == 3
+    assert t["transfers"][0]["to_account"] == "Venmo"
+    assert t["transfers"][0]["leaves_budget"] is True
+
+
+def test_a_transfer_is_not_counted_as_spending(live):
+    from dashboard import ledger
+    from dashboard import storage as st
+    conn = st.connect()
+    chk = ledger.create_account(conn, "Checking")
+    venmo = ledger.create_account(conn, "Venmo", on_budget=False)
+    g = ledger.create_category_group(conn, "Everyday")
+    cat = ledger.create_category(conn, g, "Groceries")
+    txn = ledger.add_transaction(conn, chk, "2026-08-01", -21100, "Venmo", cat)
+    conn.close()
+
+    cookie, csrf = login(live)
+    call(live, "POST", "/api/edit/transfer", {"id": txn, "account_id": venmo},
+         headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+
+    conn = st.connect()
+    # The category is gone, so the envelope no longer thinks it was spent.
+    assert ledger.category_activity(conn, cat, "2026-08") == 0
+    conn.close()
+
+
+def test_candidate_pairs_are_offered_but_not_applied(live):
+    from dashboard import ledger
+    from dashboard import storage as st
+    conn = st.connect()
+    a = ledger.create_account(conn, "Checking")
+    b = ledger.create_account(conn, "Savings")
+    ledger.add_transaction(conn, a, "2026-08-01", -50000, "To savings")
+    ledger.add_transaction(conn, b, "2026-08-02", 50000, "From checking")
+    conn.close()
+
+    cookie, csrf = login(live)
+    _, _, t = call(live, "GET", "/api/view/transfers", headers={"Cookie": cookie})
+    assert len(t["candidates"]) == 1 and t["transfers"] == []
+
+    c = t["candidates"][0]
+    call(live, "POST", "/api/edit/transfer",
+         {"out_id": c["out_id"], "in_id": c["in_id"]},
+         headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+    _, _, t = call(live, "GET", "/api/view/transfers", headers={"Cookie": cookie})
+    assert len(t["transfers"]) == 1 and t["candidates"] == []
+    assert t["transfers"][0]["from_account"] == "Checking"
+    assert t["transfers"][0]["to_account"] == "Savings"

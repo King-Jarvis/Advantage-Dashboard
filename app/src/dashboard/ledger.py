@@ -513,6 +513,225 @@ def absorbed_overspend_through(conn, month):
     return total
 
 
+# A transfer that lands the next day is still the same movement; beyond this
+# a coincidence of equal amounts is likelier than a link.
+TRANSFER_WINDOW_DAYS = 4
+
+
+def transfer_candidates(conn, limit=100):
+    """Unpaired rows that look like two halves of one movement.
+
+    Matched on the amount being exactly opposite, the accounts differing, and
+    the dates being close: a transfer usually clears the sending account
+    before the receiving one, so requiring the same date would miss most of
+    them.
+
+    Nothing is linked automatically. Two equal and opposite amounts in one
+    week can genuinely be a coincidence -- a refund here and a payment there
+    -- and silently merging them would delete two real transactions and
+    invent a movement that never happened.
+    """
+    rows = conn.execute(
+        "SELECT t.id, t.account_id, t.date, t.amount_cents, t.payee,"
+        "       a.name account FROM transactions t"
+        " JOIN accounts a ON a.id = t.account_id"
+        " WHERE t.deleted=0 AND t.transfer_id IS NULL AND t.parent_id IS NULL"
+        " ORDER BY t.date").fetchall()
+    outs = [r for r in rows if r["amount_cents"] < 0]
+    ins = [r for r in rows if r["amount_cents"] > 0]
+
+    used, pairs = set(), []
+    for o in outs:
+        if o["id"] in used:
+            continue
+        for i in ins:
+            if i["id"] in used or i["account_id"] == o["account_id"]:
+                continue
+            if i["amount_cents"] != -o["amount_cents"]:
+                continue
+            gap = abs((_date(i["date"]) - _date(o["date"])).days)
+            if gap > TRANSFER_WINDOW_DAYS:
+                continue
+            used.add(o["id"])
+            used.add(i["id"])
+            pairs.append({
+                "out_id": o["id"], "in_id": i["id"],
+                "amount_cents": -o["amount_cents"],
+                "from_account": o["account"], "to_account": i["account"],
+                "out_payee": o["payee"], "in_payee": i["payee"],
+                "date": o["date"], "days_apart": gap,
+            })
+            break
+        if len(pairs) >= limit:
+            break
+    return pairs
+
+
+def _date(text):
+    import datetime
+    return datetime.date.fromisoformat(str(text)[:10])
+
+
+def link_transfer(conn, out_id, in_id):
+    """Join two existing rows into one movement.
+
+    The rows are kept rather than replaced: each carries the bank's own id for
+    its side, and a statement re-imported later has to recognise them.
+    Categories are cleared, because a transfer is not spending and not income
+    -- counting it as either is how a budget comes to believe a payday
+    happened every time money crossed between two of your own accounts.
+    """
+    out = conn.execute("SELECT * FROM transactions WHERE id=? AND deleted=0",
+                       (out_id,)).fetchone()
+    inn = conn.execute("SELECT * FROM transactions WHERE id=? AND deleted=0",
+                       (in_id,)).fetchone()
+    if out is None or inn is None:
+        raise KeyError(out_id if out is None else in_id)
+    if out["transfer_id"] or inn["transfer_id"]:
+        raise ValueError("one of these is already part of a transfer")
+    if out["parent_id"] or inn["parent_id"]:
+        raise ValueError("a split cannot be half of a transfer")
+    if out["account_id"] == inn["account_id"]:
+        raise ValueError("a transfer moves money between two accounts")
+    if out["amount_cents"] + inn["amount_cents"] != 0:
+        raise ValueError("the two halves must cancel out")
+    if out["amount_cents"] > 0:
+        out, inn = inn, out
+
+    now = _now()
+    conn.execute("UPDATE transactions SET transfer_id=?, category_id=NULL,"
+                 " updated_at=? WHERE id=?", (inn["id"], now, out["id"]))
+    conn.execute("UPDATE transactions SET transfer_id=?, category_id=NULL,"
+                 " updated_at=? WHERE id=?", (out["id"], now, inn["id"]))
+    _audit(conn, "update", "transfer", out["id"],
+           "linked %s -> %s" % (out["account_id"], inn["account_id"]))
+    conn.commit()
+    return out["id"], inn["id"]
+
+
+def send_to_account(conn, txn_id, account_id):
+    """Record where a movement went, when the other side is not imported.
+
+    Money leaving for Venmo, a savings account nobody downloads statements
+    for, or another person is a movement, not spending -- but with only one
+    statement imported there is no second row to link to. This writes the
+    matching half into the named account and links the pair, so the money
+    leaves the budget without being counted as spending and net worth still
+    adds up.
+
+    The target must be off budget. For an account you do import, the honest
+    answer is to import it and link the two real rows: inventing a half here
+    would sit alongside the real one when the statement arrives, and the
+    account would be permanently double-counted.
+    """
+    row = conn.execute("SELECT * FROM transactions WHERE id=? AND deleted=0",
+                       (txn_id,)).fetchone()
+    if row is None:
+        raise KeyError(txn_id)
+    if row["transfer_id"]:
+        raise ValueError("this is already part of a transfer")
+    if row["parent_id"]:
+        raise ValueError("a split cannot be half of a transfer")
+    other = conn.execute("SELECT id, on_budget FROM accounts WHERE id=?",
+                         (account_id,)).fetchone()
+    if other is None:
+        raise KeyError(account_id)
+    if other["id"] == row["account_id"]:
+        raise ValueError("a transfer moves money between two accounts")
+    if other["on_budget"]:
+        raise ValueError(
+            "that account is budgeted, so import its statement and link the "
+            "two real rows -- writing a matching half here would double-count "
+            "it when the statement arrives")
+
+    mirror = new_id()
+    now = _now()
+    conn.execute(
+        "INSERT INTO transactions (id, account_id, date, amount_cents, payee,"
+        " payee_norm, notes, category_id, cleared, transfer_id, source,"
+        " created_at, updated_at) VALUES (?,?,?,?,?,?,?,NULL,?,NULL,?,?,?)",
+        (mirror, account_id, row["date"], -row["amount_cents"], row["payee"],
+         _norm_payee(row["payee"]), "other half of a transfer", row["cleared"],
+         "transfer-mirror", now, now))
+    conn.execute("UPDATE transactions SET transfer_id=?, category_id=NULL,"
+                 " updated_at=? WHERE id=?", (mirror, now, txn_id))
+    conn.execute("UPDATE transactions SET transfer_id=? WHERE id=?",
+                 (txn_id, mirror))
+    _audit(conn, "create", "transfer", txn_id, "sent to %s" % account_id)
+    conn.commit()
+    return mirror
+
+
+def send_payee_to_account(conn, payee_key, account_id):
+    """Send every unfiled row for one merchant to the same place.
+
+    Six rows reading "Transfer to Apple Pay" went to Apple Pay, all six of
+    them. Deciding that once is the same reasoning as filing a merchant into
+    a category once.
+    """
+    from .text import norm_payee
+    rows = conn.execute(
+        "SELECT id, payee FROM transactions"
+        " WHERE deleted=0 AND transfer_id IS NULL AND parent_id IS NULL"
+        "   AND category_id IS NULL").fetchall()
+    n = 0
+    for r in rows:
+        if norm_payee(r["payee"] or "") != payee_key:
+            continue
+        send_to_account(conn, r["id"], account_id)
+        n += 1
+    return n
+
+
+def unlink_transfer(conn, txn_id):
+    """Separate a pair back into two ordinary transactions."""
+    row = conn.execute("SELECT id, transfer_id FROM transactions"
+                       " WHERE id=? AND deleted=0", (txn_id,)).fetchone()
+    if row is None:
+        raise KeyError(txn_id)
+    if not row["transfer_id"]:
+        raise ValueError("this is not part of a transfer")
+    other = row["transfer_id"]
+    now = _now()
+    for tid in (row["id"], other):
+        conn.execute("UPDATE transactions SET transfer_id=NULL, updated_at=?"
+                     " WHERE id=?", (now, tid))
+    _audit(conn, "update", "transfer", row["id"], "unlinked")
+    conn.commit()
+    return [row["id"], other]
+
+
+def transfers(conn, limit=200):
+    """Every linked movement, said as an operation: out of here, into there."""
+    rows = conn.execute(
+        "SELECT t.id, t.date, t.amount_cents, t.payee, t.transfer_id,"
+        "       a.name account, a.on_budget"
+        " FROM transactions t JOIN accounts a ON a.id = t.account_id"
+        " WHERE t.deleted=0 AND t.transfer_id IS NOT NULL"
+        "   AND t.amount_cents < 0"
+        " ORDER BY t.date DESC LIMIT ?", (limit,)).fetchall()
+    out = []
+    for r in rows:
+        other = conn.execute(
+            "SELECT t.date, a.name account, a.on_budget FROM transactions t"
+            " JOIN accounts a ON a.id = t.account_id WHERE t.id=?",
+            (r["transfer_id"],)).fetchone()
+        if other is None:
+            continue
+        out.append({
+            "id": r["id"], "pair_id": r["transfer_id"], "date": r["date"],
+            "amount_cents": -r["amount_cents"],
+            "from_account": r["account"], "to_account": other["account"],
+            "payee": r["payee"],
+            # A move to a tracking account leaves the budget; one between two
+            # budgeted accounts does not. Worth saying, because the first
+            # changes what there is to spend and the second does not.
+            "leaves_budget": bool(r["on_budget"]) and not bool(other["on_budget"]),
+            "enters_budget": not bool(r["on_budget"]) and bool(other["on_budget"]),
+        })
+    return out
+
+
 def payee_groups(conn, filed=False, limit=300):
     """What is still unfiled, grouped by merchant, biggest first.
 

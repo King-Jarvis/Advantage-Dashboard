@@ -113,6 +113,9 @@ ROUTES = [
     ("fileone",  {"PATCH"},
      re.compile(r"^/api/edit/transaction/([0-9a-f]{32})$"),                 "session"),
     ("filemany", {"POST"},        re.compile(r"^/api/edit/by-payee$"),      "session"),
+    ("xfers",    {"GET"},         re.compile(r"^/api/view/transfers$"),     "session"),
+    ("xferlink", {"POST", "DELETE"},
+     re.compile(r"^/api/edit/transfer$"),                                  "session"),
     ("split",    {"GET", "POST", "DELETE"},
      re.compile(r"^/api/edit/transaction/([0-9a-f]{32})/split$"),           "session"),
     ("upload",   {"POST"},        re.compile(r"^/api/import/upload$"),     "session"),
@@ -488,7 +491,13 @@ class Handler(BaseHTTPRequestHandler):
     def api_unfiled(self, conn, session):
         from . import ledger
         filed = (self.query().get("filed") or [""])[0] == "1"
-        self.json_out({"filed": filed,
+        # Off-budget accounts come too: the same dropdown offers "spent on
+        # this" and "moved to there", because from a statement row those look
+        # identical and the difference is the user's to state.
+        tracking = [dict(r) for r in conn.execute(
+            "SELECT id, name FROM accounts WHERE on_budget=0 AND closed=0"
+            " ORDER BY name")]
+        self.json_out({"filed": filed, "tracking": tracking,
                        "groups": ledger.payee_groups(conn, filed=filed)})
 
     def api_fileone(self, conn, session, txn_id):
@@ -536,6 +545,37 @@ class Handler(BaseHTTPRequestHandler):
             return self.fail(404, "no such transaction or category")
         self.json_out({"id": txn_id, "parts": ledger.split_parts(conn, txn_id)})
 
+    def api_xfers(self, conn, session):
+        """Linked movements, and pairs that look like one."""
+        from . import ledger
+        self.json_out({"transfers": ledger.transfers(conn),
+                       "candidates": ledger.transfer_candidates(conn)})
+
+    def api_xferlink(self, conn, session):
+        from . import ledger
+        data = self.body_json()
+        if self.command == "DELETE":
+            try:
+                ids = ledger.unlink_transfer(conn, str(data.get("id", "")))
+            except KeyError:
+                return self.fail(404, "no such transaction")
+            return self.json_out({"unlinked": ids})
+        # Two shapes: link two real rows, or record where a movement went when
+        # the other side was never imported.
+        if data.get("account_id"):
+            try:
+                mirror = ledger.send_to_account(
+                    conn, str(data.get("id", "")), str(data["account_id"]))
+            except KeyError:
+                return self.fail(404, "no such transaction or account")
+            return self.json_out({"mirror_id": mirror})
+        try:
+            out_id, in_id = ledger.link_transfer(
+                conn, str(data.get("out_id", "")), str(data.get("in_id", "")))
+        except KeyError:
+            return self.fail(404, "no such transaction")
+        self.json_out({"out_id": out_id, "in_id": in_id})
+
     def api_filemany(self, conn, session):
         """File every unfiled row for one merchant.
 
@@ -549,6 +589,15 @@ class Handler(BaseHTTPRequestHandler):
         category_id = str(data.get("category_id", ""))
         if not key:
             raise ValueError("payee_key is required")
+        # A destination rather than a category: these rows moved money, they
+        # did not spend it.
+        if data.get("account_id"):
+            try:
+                n = ledger.send_payee_to_account(
+                    conn, key, str(data["account_id"]))
+            except KeyError:
+                return self.fail(404, "no such account")
+            return self.json_out({"filed": n, "as": "transfer"})
         try:
             n = ledger.categorise_payee(
                 conn, key, category_id,

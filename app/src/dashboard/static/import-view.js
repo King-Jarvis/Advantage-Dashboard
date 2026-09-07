@@ -16,6 +16,7 @@ const state = {
   batch: null, rows: [], busy: false, error: "", note: "",
   addingAccount: false,
   unfiled: [], allCats: [], unfiledBand: "in", showFiled: false,
+  tracking: [],
 };
 
 function fmtRange(a, b) {
@@ -158,19 +159,27 @@ function unfiledPanel(refresh) {
         text: g.category ? `${g.category}${g.mixed ? " (mixed)" : ""}`
                          : "Choose a category…" }),
       ...state.allCats.map((c) => el("option", {
-        value: c.id,
-        text: c.is_income ? `${c.name} (income)` : c.name })));
+        value: `cat:${c.id}`,
+        text: c.is_income ? `${c.name} (income)` : c.name })),
+      // From a statement row, "spent at Venmo" and "moved to Venmo" look
+      // identical. Only you know which, so both are offered in one list.
+      ...state.tracking.map((a) => el("option", {
+        value: `acct:${a.id}`, text: `→ moved to ${a.name}` })));
     sel.addEventListener("change", async () => {
       if (!sel.value) return;
       sel.disabled = true;
       try {
+        const [kind, id] = sel.value.split(":");
         const r = await post("/api/edit/by-payee", {
-          payee_key: g.key, category_id: sel.value,
+          payee_key: g.key,
+          ...(kind === "acct" ? { account_id: id } : { category_id: id }),
           // Only when looking at things already filed, and only then: a
           // backlog sweep must never rewrite a decision made by hand.
           overwrite: Boolean(state.showFiled),
         });
-        state.note = `Filed ${r.filed} row${r.filed === 1 ? "" : "s"}.`;
+        state.note = r.as === "transfer"
+          ? `Recorded ${r.filed} row${r.filed === 1 ? "" : "s"} as a transfer.`
+          : `Filed ${r.filed} row${r.filed === 1 ? "" : "s"}.`;
       } catch (e) {
         state.error = (e && e.message) || "Could not file those.";
       }
@@ -204,6 +213,7 @@ export async function importView(container, { onDone } = {}) {
   state.accounts = [...accts.accounts].sort(
     (a, b) => (b.on_budget ? 1 : 0) - (a.on_budget ? 1 : 0));
   state.categories = cats.categories;
+  state.tracking = unfiled.tracking || [];
   state.unfiled = unfiled.groups || [];
   // Income categories are offered here even though the classifier never
   // suggests one: filing a salary is exactly the job this panel is for.
