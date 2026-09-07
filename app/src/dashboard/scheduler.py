@@ -28,6 +28,9 @@ from . import push, settings, storage, sync
 # Below this, a poll costs more in quota than it buys in freshness.
 MIN_INTERVAL = 60
 DEFAULT_INTERVAL = 180
+# A restart should catch up rather than sit idle for a full interval. Long
+# enough that the port is bound and TLS is answering first.
+FIRST_RUN = 8
 
 _thread = None
 _wake = threading.Event()
@@ -59,13 +62,15 @@ def _once(conn, woken):
 
 
 def _loop():
+    first = True
     while not _stop.is_set():
         conn = None
         try:
             conn = storage.connect()
-            wait_for = interval(conn)
+            wait_for = FIRST_RUN if first else interval(conn)
         except Exception:
-            wait_for = DEFAULT_INTERVAL
+            wait_for = FIRST_RUN if first else DEFAULT_INTERVAL
+        first = False
         woken = _wake.wait(timeout=wait_for)
         if _stop.is_set():
             return

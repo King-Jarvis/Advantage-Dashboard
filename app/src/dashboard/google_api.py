@@ -66,6 +66,14 @@ def access_token(conn, account_id, force=False):
         except Exception:
             pass        # unreadable cache is not fatal; fall through to refresh
 
+    if not crypt.available():
+        # Distinguishing these matters: one means reconnect the account, the
+        # other means the encryption key is missing and reconnecting would
+        # store a token that cannot be read back either. Reporting the first
+        # when it is the second sends you round a loop that cannot succeed.
+        raise GoogleError(
+            "the encryption key is not readable, so the saved Google token "
+            "cannot be decrypted. Check TOKEN_KEY_PATH.")
     refresh = settings.google_refresh_token(conn, account_id)
     if not refresh:
         raise GoogleError("account has no refresh token -- reconnect it")

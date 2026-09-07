@@ -481,3 +481,13 @@ def test_gmails_important_label_does_not_promote_a_robot():
 def test_starring_a_robot_still_wins():
     """An explicit human signal outranks every inference."""
     assert google_api._baseline(["STARRED"], machine=True)[0] == 5
+
+
+def test_a_missing_encryption_key_is_not_reported_as_a_missing_token(
+        conn, acct, monkeypatch):
+    """One means reconnect the account; the other means reconnecting would
+    store a token that cannot be read back either."""
+    conn.execute("UPDATE google_accounts SET expires_at=0 WHERE id=?", (acct,))
+    monkeypatch.setattr(google_api.crypt, "available", lambda: False)
+    with pytest.raises(google_api.GoogleError, match="encryption key"):
+        google_api.access_token(conn, acct)
