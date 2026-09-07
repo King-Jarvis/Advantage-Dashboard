@@ -81,7 +81,14 @@ function header(onMonth, refresh) {
                      "aria-label": "Next month", onclick: () => shift(1) }),
       el("div", { class: "spacer" }),
       el("button", { class: "btn", type: "button", text: "Where things are filed",
-                     onclick: () => { state.organising = true; refresh(true); } }),
+                     onclick: () => {
+                       state.organising = true;
+                       // Not refresh(true): that re-renders this screen's
+                       // markup and never re-enters budgetView, which is
+                       // where the handover is decided. The flag would flip
+                       // and nothing would ever read it.
+                       refresh();
+                     } }),
       el("button", { class: "btn", type: "button", text: "New category",
                      onclick: () => { state.adding = !state.adding; refresh(true); } })),
     el("div", { class: "node-body" },
