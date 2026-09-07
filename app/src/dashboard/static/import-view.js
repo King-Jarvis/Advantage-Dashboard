@@ -174,26 +174,37 @@ export async function importView(container, { onDone } = {}) {
     return importView(container, { onDone });
   }
 
+  // Functions, not constants. Built once, these captured the state as it was
+  // when the view loaded, so toggling flipped a flag that nothing ever read
+  // again -- which is exactly why the button appeared to do nothing. The
+  // inputs stay outside so text typed into them survives a re-render.
+  //
   // With no accounts the form is the only way forward, so it is simply there.
-  // With accounts it is an occasional errand, so it goes behind a button and
-  // out of the way of the thing you came to do.
-  const firstOne = state.accounts.length === 0;
-  const showForm = firstOne || state.addingAccount;
+  // With accounts it is an occasional errand and goes behind a button, out of
+  // the way of the thing you came to do.
+  function firstOne() { return state.accounts.length === 0; }
 
-  const addRow = !showForm ? null : el("div", { class: "addacct" },
-    el("div", { class: "label",
-      text: firstOne ? "Add an account" : "Add another account" }),
-    firstOne ? el("div", { class: "hint",
-      text: "A statement belongs to an account, so there has to be one "
-          + "before anything can be imported." }) : null,
-    el("div", { class: "row wrap" }, newName, newType,
-      el("button", { class: "btn primary", type: "button", text: "Add",
-                     onclick: addAccount })));
+  function addRow() {
+    if (!(firstOne() || state.addingAccount)) return null;
+    return el("div", { class: "addacct" },
+      el("div", { class: "label",
+        text: firstOne() ? "Add an account" : "Add another account" }),
+      firstOne() ? el("div", { class: "hint",
+        text: "A statement belongs to an account, so there has to be one "
+            + "before anything can be imported." }) : null,
+      el("div", { class: "row wrap" }, newName, newType,
+        el("button", { class: "btn primary", type: "button", text: "Add",
+                       onclick: addAccount })));
+  }
 
-  const addToggle = firstOne ? null : el("button", {
-    class: "btn", type: "button",
-    text: state.addingAccount ? "Cancel" : "Add another account",
-    onclick: () => { state.addingAccount = !state.addingAccount; render(); } });
+  function addToggle() {
+    if (firstOne()) return null;
+    return el("button", {
+      class: "btn", type: "button",
+      text: state.addingAccount ? "Cancel" : "Add another account",
+      onclick: () => { state.addingAccount = !state.addingAccount; render(); },
+    });
+  }
   const file = el("input", { type: "file", class: "input",
                              accept: ".csv,.ofx,.qfx,.txt,text/csv",
                              "aria-label": "Statement file" });
@@ -242,9 +253,9 @@ export async function importView(container, { onDone } = {}) {
                              text: state.busy ? "Reading…" : "Read file",
                              onclick: doUpload }),
               // Pushed to the far end, away from the thing you came to do.
-              el("div", { class: "spacer" }), addToggle)
+              el("div", { class: "spacer" }), addToggle())
           : null,
-        addRow,
+        addRow(),
         state.accounts.length
           ? el("div", { class: "hint",
               text: "Nothing is written until you commit. Duplicates and rows "
