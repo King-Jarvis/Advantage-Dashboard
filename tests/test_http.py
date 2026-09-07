@@ -1449,3 +1449,73 @@ def test_the_account_is_required_when_there_are_several(live, tmp_path,
                            headers={"Cookie": cookie, "X-CSRF-Token": csrf})
     assert status == 400 and "account_id" in str(body)
     crypt.reset_for_tests()
+
+
+# ── themes over HTTP ──────────────────────────────────────────────────────
+def test_the_active_theme_is_readable_without_a_session(live):
+    """The sign-in screen should already be wearing the chosen theme, and a
+    palette reveals nothing about anyone."""
+    status, _, body = call(live, "GET", "/api/theme")
+    assert status == 200
+    assert "tokens" in body and body["base"] in ("dark", "light")
+
+
+def test_the_catalog_needs_a_session(live):
+    status, _, _ = call(live, "GET", "/api/themes")
+    assert status == 401
+
+
+def test_importing_activating_and_deleting_a_theme(live):
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+
+    status, _, made = call(live, "POST", "/api/themes", {
+        "name": "Painting", "base": "light",
+        "tokens": {"--canvas": "#EDE6D8", "--text": "#000000"}}, headers=h)
+    assert status == 200 and made["tokens"] == 2
+    tid = made["id"]
+
+    status, _, _ = call(live, "POST", f"/api/themes/{tid}", {}, headers=h)
+    assert status == 200
+
+    # It is now what an unauthenticated first paint would use.
+    _, _, active = call(live, "GET", "/api/theme")
+    assert active["base"] == "light"
+    assert active["tokens"]["--canvas"] == "#EDE6D8"
+
+    status, _, _ = call(live, "DELETE", f"/api/themes/{tid}", headers=h)
+    assert status == 200
+    # Deleting what you were wearing must leave you wearing something.
+    _, _, after = call(live, "GET", "/api/theme")
+    assert after["id"] == "" and after["tokens"] == {}
+
+
+def test_a_hostile_theme_is_refused_with_a_usable_message(live):
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    status, _, body = call(live, "POST", "/api/themes", {
+        "name": "Nasty", "base": "dark",
+        "tokens": {"--canvas": "red; background: url(https://evil/x)"}}, headers=h)
+    assert status == 400
+    # Naming the token is the only way the author can fix it.
+    assert "--canvas" in str(body)
+
+
+def test_a_builtin_cannot_be_deleted_over_http(live):
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    _, _, cat = call(live, "GET", "/api/themes", headers={"Cookie": cookie})
+    builtin = next(t for t in cat["themes"] if t["builtin"])
+    status, _, _ = call(live, "DELETE", f"/api/themes/{builtin['id']}", headers=h)
+    assert status == 400
+
+
+def test_the_catalog_says_which_theme_is_worn(live):
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    _, _, cat = call(live, "GET", "/api/themes", headers={"Cookie": cookie})
+    builtin = next(t for t in cat["themes"] if t["builtin"])
+    call(live, "POST", f"/api/themes/{builtin['id']}", {}, headers=h)
+    _, _, again = call(live, "GET", "/api/themes", headers={"Cookie": cookie})
+    assert again["active"] == builtin["id"]
+    assert next(t for t in again["themes"] if t["id"] == builtin["id"])["active"]

@@ -8,6 +8,7 @@ import { ApiError, get, setCsrf } from "./api.js";
 import { el, mount } from "./dom.js";
 import { loginView } from "./login.js";
 import { setupView } from "./setup-view.js";
+import { load as loadTheme } from "./theme.js";
 import { budgetView } from "./budget-view.js";
 import { overviewView } from "./overview-view.js";
 import { homeView } from "./home-view.js";
@@ -225,6 +226,10 @@ async function render() {
 }
 
 async function boot() {
+  // Before anything is drawn, so no screen is ever painted in one palette and
+  // repainted in another. It is also why /api/theme needs no session: the
+  // sign-in screen should already be wearing the chosen theme.
+  await loadTheme();
   try {
     const me = await get("/api/auth/whoami");
     state.user = me.username;

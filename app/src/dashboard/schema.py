@@ -9,6 +9,8 @@ operation is not optional.
 """
 
 
+import json
+
 SCHEMA_VERSION = 3
 
 # Foreign keys are off by default in SQLite and must be enabled per
@@ -268,6 +270,23 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 CREATE INDEX IF NOT EXISTS ix_messages_when ON messages(received_at);
+
+-- ── Themes ───────────────────────────────────────────────────────────────
+-- A theme is data, not code: a validated map of design-token names to CSS
+-- values, applied at runtime by setting custom properties on the root
+-- element. That is why one can be imported from a file rather than written
+-- into the stylesheet.
+CREATE TABLE IF NOT EXISTS themes (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    author      TEXT NOT NULL DEFAULT '',
+    base        TEXT NOT NULL DEFAULT 'dark',
+    tokens_json TEXT NOT NULL DEFAULT '{}',
+    -- Built-ins cannot be deleted: losing every theme would leave no way back
+    -- to a known-good look, which is the one unrecoverable state here.
+    builtin     INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS ix_messages_rank ON messages(archived, importance);
 
 -- ── Sync bookkeeping ─────────────────────────────────────────────────────
@@ -362,11 +381,32 @@ def add_column(conn, table, name, decl):
     return True
 
 
+def _seed_themes(conn):
+    """Put the shipped themes in the table if they are not there.
+
+    Matched by name so a second start does not add a duplicate, and so a
+    built-in whose colours change in a release updates rather than forking.
+    """
+    from . import builtin_themes, themes
+    for theme in builtin_themes.ALL:
+        row = conn.execute("SELECT id FROM themes WHERE name=? AND builtin=1",
+                           (theme["name"],)).fetchone()
+        if row is None:
+            themes.save(conn, theme, builtin=True)
+        else:
+            conn.execute(
+                "UPDATE themes SET tokens_json=?, base=? WHERE id=?",
+                (json.dumps(theme["tokens"], separators=(",", ":")),
+                 theme["base"], row["id"]))
+    conn.commit()
+
+
 def migrate(conn):
     """Apply the schema. Safe to call on every start."""
     conn.executescript(DDL)
     for table, name, decl in ADDED_COLUMNS:
         add_column(conn, table, name, decl)
+    _seed_themes(conn)
     cur = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'")
     row = cur.fetchone()
     if row is None:

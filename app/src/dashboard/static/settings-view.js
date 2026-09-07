@@ -8,11 +8,13 @@
  * that a key is set and offer to replace it, but never reveal it -- which
  * also means a stolen session cannot harvest credentials.
  */
-import { del, get, patch, post } from "./api.js";
+import { api, del, get, patch, post } from "./api.js";
+import { apply as applyTheme } from "./theme.js";
 import { el, mount } from "./dom.js";
 
 const GROUPS = [
   ["Accounts", []],
+  ["Themes", []],
   ["Credentials", ["google_client_id", "google_client_secret",
                    "anthropic_api_key"]],
   ["Assistance", ["enable_llm_categories", "enable_spending_analysis",
@@ -20,7 +22,7 @@ const GROUPS = [
   ["Budget engine", ["baseline_window_months", "min_months_for_suggestion",
                      "month_start_day", "currency_symbol"]],
   ["Syncing", ["mail_poll_seconds", "calendar_poll_seconds",
-               "inbox_min_importance", "timezone"]],
+               "inbox_min_importance", "load_remote_images", "timezone"]],
 ];
 
 const state = { data: null, note: "", error: "" };
@@ -73,6 +75,104 @@ function settingRow(item, onChange) {
       el("span", { class: "setname", text: item.label || item.key }),
       el("span", { class: "hint", text: item.description })),
     el("div", { class: "setcontrol" }, control(item, onChange)));
+}
+
+/* ── themes ─────────────────────────────────────────────────────────────── */
+function swatches(theme, preview) {
+  return el("div", { class: "sw-row" }, ...preview.map((name) => {
+    const dot = el("span", { class: "sw", title: name });
+    // Themes are data, so a card can be painted in its own colours without
+    // wearing the theme -- you see what you are choosing before you choose it.
+    const value = theme.tokens[name];
+    if (value) dot.style.setProperty("background", value);
+    return dot;
+  }));
+}
+
+function themeCard(t, preview, refresh) {
+  return el("div", { class: "themecard" + (t.active ? " on" : "") },
+    el("div", { class: "themehead" },
+      el("div", {},
+        el("div", { class: "setname", text: t.name }),
+        el("div", { class: "hint",
+          text: `${t.base} · ${Object.keys(t.tokens).length} tokens`
+              + (t.author ? ` · ${t.author}` : "") })),
+      t.active ? el("span", { class: "pill ok", text: "wearing" }) : null),
+    swatches(t, preview),
+    el("div", { class: "row wrap themebtns" },
+      t.active ? null : el("button", {
+        class: "btn primary", type: "button", text: "Wear this",
+        onclick: async () => {
+          await post(`/api/themes/${t.id}`, {});
+          // Applied at once rather than after a reload: the point of holding
+          // a theme as tokens is that switching costs nothing.
+          applyTheme(t.tokens, t.base);
+          refresh();
+        } }),
+      el("button", {
+        class: "btn", type: "button", text: "Export",
+        onclick: () => {
+          const text = JSON.stringify(
+            { name: t.name, author: t.author, base: t.base, tokens: t.tokens },
+            null, 2);
+          navigator.clipboard.writeText(text).then(
+            () => { window.alert("Copied. Paste it into the import box, or "
+                               + "hand it to Claude to make a variation."); },
+            () => { window.prompt("Copy this:", text); });
+        } }),
+      t.builtin ? null : el("button", {
+        class: "btn danger", type: "button", text: "Delete",
+        onclick: async () => {
+          if (!window.confirm(`Delete the theme "${t.name}"?`)) return;
+          await del(`/api/themes/${t.id}`);
+          refresh();
+        } })));
+}
+
+function themesSection(refresh) {
+  const data = state.data.themes || { themes: [], preview: [] };
+  const out = el("div", { class: "checkout" });
+  const box = el("textarea", {
+    class: "input mono", rows: 4, id: "theme-json",
+    placeholder: '{ "name": "…", "base": "light", "tokens": { "--canvas": "#EDE6D8" } }',
+  });
+
+  async function importTheme() {
+    out.textContent = "";
+    const text = box.value.trim();
+    if (!text) { out.textContent = "Paste a theme first."; return; }
+    try {
+      // Sent as the raw file so a theme can be handed over unchanged rather
+      // than wrapped in an envelope first.
+      const r = await api("POST", "/api/themes", text);
+      box.value = "";
+      mount(out, el("span", { class: "pill ok",
+        text: `Added "${r.name}" — ${r.tokens} tokens` }));
+      refresh();
+    } catch (e) {
+      // The server says exactly which token is wrong; repeating it verbatim
+      // is the only way the author can fix it.
+      mount(out, el("span", { class: "pill warn",
+        text: (e && e.message) || "That theme was not accepted." }));
+    }
+  }
+
+  return el("div", { class: "group" },
+    el("h2", { class: "grouphead", text: "Themes" }),
+    el("p", { class: "hint",
+      text: "A theme is a file of colour values. Export one, change it or ask "
+          + "Claude for a variation, and paste it back." }),
+    el("div", { class: "themegrid" },
+      ...(data.themes || []).map((t) => themeCard(t, data.preview || [], refresh))),
+    el("div", { class: "setrow" },
+      el("label", { class: "setlabel", for: "theme-json" },
+        el("span", { class: "setname", text: "Import a theme" }),
+        el("span", { class: "hint", text: "Paste the JSON and it is checked "
+          + "before anything is stored." })),
+      el("div", { class: "setcontrol" }, box,
+        el("div", { class: "row wrap" },
+          el("button", { class: "btn primary", type: "button",
+                         text: "Import", onclick: importTheme }), out))));
 }
 
 /* ── accounts ───────────────────────────────────────────────────────────── */
@@ -174,6 +274,14 @@ function accountsSection(refresh) {
 /* ── the view ───────────────────────────────────────────────────────────── */
 export async function settingsView(container, { onGo } = {}) {
   state.data = await get("/api/settings");
+  // Fetched alongside rather than folded into /api/settings: a theme list is
+  // a different shape and a different concern, and merging them would mean
+  // every settings save re-sent every theme's colours.
+  try {
+    state.data.themes = await get("/api/themes");
+  } catch {
+    state.data.themes = { themes: [], preview: [] };
+  }
   const byKey = Object.fromEntries(state.data.settings.map((s) => [s.key, s]));
 
   const refresh = () => settingsView(container, { onGo });
@@ -192,6 +300,7 @@ export async function settingsView(container, { onGo } = {}) {
 
   const sections = GROUPS.map(([title, keys]) => {
     if (title === "Accounts") return accountsSection(refresh);
+    if (title === "Themes") return themesSection(refresh);
     return el("div", { class: "setgroup" },
       el("div", { class: "setgroup-head" },
         el("span", { class: "label", text: title })),

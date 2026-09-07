@@ -31,6 +31,7 @@ from . import (
     stats,
     storage,
     sync,
+    themes,
 )
 
 PACKAGE = os.path.dirname(os.path.abspath(__file__))
@@ -83,6 +84,12 @@ ROUTES = [
     ("inbox",    {"GET"},         re.compile(r"^/api/view/inbox$"),        "session"),
     # Signed, so this can never become an open proxy on the home network.
     ("image",    {"GET"},         re.compile(r"^/api/image$"),             "session"),
+    # The active theme is needed before the first paint, so it is readable
+    # without a session -- it carries no personal data, only colours.
+    ("themeact", {"GET"},         re.compile(r"^/api/theme$"),             "none"),
+    ("themes",   {"GET", "POST"}, re.compile(r"^/api/themes$"),            "session"),
+    ("theme1",   {"POST", "DELETE"},
+     re.compile(r"^/api/themes/([0-9a-f]{32})$"),                          "session"),
     ("msgbody",  {"GET"},
      re.compile(r"^/api/view/message/([0-9a-f]{32})$"),                      "session"),
     ("syncst",   {"GET"},         re.compile(r"^/api/view/status$"),       "session"),
@@ -567,6 +574,55 @@ class Handler(BaseHTTPRequestHandler):
                 out.append(b)
         self.json_out({"id": message_id, "body": text, "blocks": out,
                        "cached": cached, "images_on": bool(show)})
+
+    # ── themes ────────────────────────────────────────────────────────────
+    def api_themeact(self, conn, session):
+        """What the page should wear, asked for before anything is drawn.
+
+        Unauthenticated on purpose: the sign-in screen should already be
+        wearing the chosen theme, and a palette reveals nothing about anyone.
+        """
+        active = settings.get(conn, "active_theme")
+        theme = themes.get(conn, active) if active else None
+        self.json_out({"id": theme["id"] if theme else "",
+                       "base": theme["base"] if theme else "dark",
+                       "tokens": theme["tokens"] if theme else {}})
+
+    def api_themes(self, conn, session):
+        if self.command == "GET":
+            active = settings.get(conn, "active_theme")
+            return self.json_out({
+                "active": active,
+                "preview": themes.PREVIEW,
+                "themes": [{**t, "active": t["id"] == active}
+                           for t in themes.all_themes(conn)]})
+        # POST: import. The body is the theme file itself, so a file can be
+        # handed over unchanged rather than wrapped in an envelope first.
+        try:
+            theme = themes.parse(self._raw_body(themes.MAX_JSON))
+        except themes.ThemeError as e:
+            return self.fail(400, str(e))
+        tid = themes.save(conn, theme)
+        self.json_out({"id": tid, "name": theme["name"],
+                       "tokens": len(theme["tokens"])})
+
+    def api_theme1(self, conn, session, theme_id):
+        if self.command == "DELETE":
+            try:
+                themes.delete(conn, theme_id)
+            except KeyError:
+                return self.fail(404, "no such theme")
+            except themes.ThemeError as e:
+                return self.fail(400, str(e))
+            if settings.get(conn, "active_theme") == theme_id:
+                # Deleting what you are wearing has to leave you wearing
+                # something, or the next paint has no colours at all.
+                settings.set_(conn, "active_theme", "")
+            return self.json_out({"deleted": theme_id})
+        if themes.get(conn, theme_id) is None:
+            return self.fail(404, "no such theme")
+        settings.set_(conn, "active_theme", theme_id)
+        self.json_out({"active": theme_id})
 
     def api_image(self, conn, session):
         q = self.query()

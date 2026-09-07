@@ -41,6 +41,10 @@ SPEC = {
     # Images are fetched by the dashboard, never by your browser, so the
     # sender learns that Eva asked and nothing about your device. Opening a
     # message still tells them it was opened, which is why this can go off.
+    # Empty means the stylesheet's own defaults, which is a real choice and
+    # not a missing value.
+    "active_theme": ("text", "", "Which theme the dashboard is wearing"),
+
     "load_remote_images": ("bool", True,
                            "Show pictures in email, fetched via the dashboard"),
 
@@ -78,6 +82,7 @@ LABELS = {
     "mail_poll_seconds": "Mail check (seconds)",
     "calendar_poll_seconds": "Calendar check (seconds)",
     "inbox_min_importance": "Inbox importance threshold",
+    "active_theme": "Theme",
     "load_remote_images": "Show pictures in email",
     "anthropic_api_key": "Anthropic API key",
     "base_url": "Dashboard address",
