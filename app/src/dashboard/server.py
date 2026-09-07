@@ -120,6 +120,8 @@ ROUTES = [
      re.compile(r"^/api/edit/transaction/([0-9a-f]{32})/split$"),           "session"),
     ("upload",   {"POST"},        re.compile(r"^/api/import/upload$"),     "session"),
     ("batches",  {"GET"},         re.compile(r"^/api/import/batches$"),    "session"),
+    ("unimport", {"POST"},
+     re.compile(r"^/api/import/batch/([0-9a-f]{32})/revert$"),              "session"),
     ("batch",    {"GET", "POST", "DELETE"},
      re.compile(r"^/api/import/batch/([0-9a-f]{32})$"), "session"),
     ("batchrow", {"PATCH"},
@@ -487,6 +489,16 @@ class Handler(BaseHTTPRequestHandler):
         counts["model_available"] = has_key
         counts["model_allowed"] = allowed
         self.json_out(counts)
+
+    def api_unimport(self, conn, session, batch_id):
+        """Undo a committed import. Filing a statement against the wrong
+        account is an ordinary mistake and should not be permanent."""
+        from . import statements as st
+        try:
+            out = st.revert_batch(conn, batch_id)
+        except KeyError:
+            return self.fail(404, "no such import")
+        self.json_out(out)
 
     def api_unfiled(self, conn, session):
         from . import ledger

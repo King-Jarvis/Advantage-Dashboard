@@ -1,5 +1,6 @@
 """Reading statements: the formats banks actually produce, and the traps."""
 
+
 import pytest
 
 from dashboard import ledger
@@ -314,3 +315,66 @@ def test_near_duplicate_detection_survives_bank_decoration(conn, book):
     bid, _ = st.create_batch(conn, book["acct"], "x.csv", data)
     row = st.batch_rows(conn, bid)[0]
     assert row["is_duplicate"] and row["dup_kind"] == "near"
+
+
+# ── undoing an import ─────────────────────────────────────────────────────
+def test_reverting_removes_exactly_what_it_added(conn, book):
+    """Filing a statement against the wrong account was permanent: a hundred
+    rows in the wrong place and nothing to do but delete them one at a time."""
+    mine = ledger.add_transaction(conn, book["acct"], "2026-07-01", -500,
+                                  "Nothing to do with any import")
+    bid, _ = st.create_batch(conn, book["acct"], "aug.csv", UK)
+    assert st.commit_batch(conn, bid) == 3
+
+    out = st.revert_batch(conn, bid)
+    assert out["transactions_removed"] == 3
+
+    live = [r[0] for r in conn.execute(
+        "SELECT id FROM transactions WHERE deleted=0")]
+    assert live == [mine], "removed something that did not come from the import"
+    assert ledger.account_balance(conn, book["acct"]) == -500
+
+
+def test_the_batch_is_marked_reverted(conn, book):
+    bid, _ = st.create_batch(conn, book["acct"], "aug.csv", UK)
+    st.commit_batch(conn, bid)
+    st.revert_batch(conn, bid)
+    row = conn.execute("SELECT state, rows_imported FROM import_batches"
+                       " WHERE id=?", (bid,)).fetchone()
+    assert row["state"] == "reverted" and row["rows_imported"] == 0
+
+
+def test_the_same_file_can_be_imported_again_after_an_undo(conn, book):
+    """Undoing into the wrong account then importing into the right one is
+    the whole point, and dedup must not block the second attempt."""
+    bid, _ = st.create_batch(conn, book["acct"], "aug.csv", UK)
+    st.commit_batch(conn, bid)
+    st.revert_batch(conn, bid)
+    bid2, _ = st.create_batch(conn, book["other"], "aug.csv", UK)
+    assert st.commit_batch(conn, bid2) == 3
+    assert ledger.account_balance(conn, book["other"]) == -4215 + 250000 - 6120
+
+
+def test_only_a_committed_import_can_be_undone(conn, book):
+    bid, _ = st.create_batch(conn, book["acct"], "aug.csv", UK)
+    with pytest.raises(ValueError, match="committed"):
+        st.revert_batch(conn, bid)
+
+
+def test_reverting_an_unknown_import(conn):
+    with pytest.raises(KeyError):
+        st.revert_batch(conn, "0" * 32)
+
+
+def test_a_split_made_from_an_imported_row_goes_too(conn, book):
+    """delete_transaction takes whole units, so a split parent is never left
+    behind without its children."""
+    bid, _ = st.create_batch(conn, book["acct"], "aug.csv", UK)
+    st.commit_batch(conn, bid)
+    txn = conn.execute("SELECT id FROM transactions WHERE amount_cents=-4215"
+                       ).fetchone()[0]
+    ledger.split_transaction(conn, txn, [(book["groceries"], -4000),
+                                         (book["groceries"], -215)])
+    st.revert_batch(conn, bid)
+    assert conn.execute("SELECT COUNT(*) FROM transactions"
+                        " WHERE deleted=0").fetchone()[0] == 0

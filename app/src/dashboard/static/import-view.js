@@ -16,7 +16,7 @@ const state = {
   batch: null, rows: [], busy: false, error: "", note: "",
   addingAccount: false,
   unfiled: [], allCats: [], unfiledBand: "in", showFiled: false,
-  tracking: [], transfers: [], candidates: [],
+  tracking: [], transfers: [], candidates: [], history: [],
 };
 
 function fmtRange(a, b) {
@@ -287,6 +287,44 @@ function transfersPanel(refresh) {
   return el("div", { class: "xfers" }, ...bits);
 }
 
+/* What has been imported, and a way back.
+ *
+ * Filing a statement against the wrong account is an ordinary mistake and was
+ * permanent: a hundred and twenty rows in the wrong place with nothing to do
+ * but delete them one at a time. Every committed row remembers the
+ * transaction it created, so the undo is exact -- it removes what that import
+ * added and nothing else.
+ */
+function historyPanel(refresh) {
+  const done = state.history.filter((b) => b.state !== "review");
+  if (!done.length) {
+    return el("div", { class: "hint pad", text: "Nothing imported yet." });
+  }
+  return el("div", { class: "imphist" }, ...done.map((b) => el("div",
+    { class: "imphist-row" },
+    el("div", { class: "grow" },
+      el("div", { class: "imphist-name", text: b.filename || "(no name)" }),
+      el("div", { class: "hint",
+        text: `${b.account} · ${b.uploaded_at.slice(0, 16).replace("T", " ")}`
+            + ` · ${b.rows_imported} imported`
+            + (b.rows_duplicate ? `, ${b.rows_duplicate} duplicate` : "") })),
+    b.state === "committed"
+      ? el("button", { class: "btn ghost", type: "button", text: "Undo",
+          onclick: async () => {
+            if (!window.confirm(`Undo "${b.filename}"?\n\nThis removes the `
+                + `${b.rows_imported} transactions it added. Anything you have `
+                + "since edited or categorised in them goes too.")) return;
+            try {
+              const r = await post(`/api/import/batch/${b.id}/revert`, {});
+              state.note = `Undone. ${r.transactions_removed} transactions removed.`;
+            } catch (e) {
+              state.error = (e && e.message) || "Could not undo that import.";
+            }
+            return refresh();
+          } })
+      : el("span", { class: "pill", text: b.state }))));
+}
+
 export async function importView(container, { onDone } = {}) {
   const [accts, cats, cov, batches, unfiled, xfers] = await Promise.all([
     get("/api/accounts"), get("/api/categories"), get("/api/view/coverage"),
@@ -307,6 +345,7 @@ export async function importView(container, { onDone } = {}) {
   // suggests one: filing a salary is exactly the job this panel is for.
   state.allCats = cats.categories;
   state.coverage = cov;
+  state.history = batches.batches || [];
   state.pending = (batches.batches || []).filter((b) => b.state === "review");
 
   // A batch left in review is not lost. Uploading and then navigating away is
@@ -561,7 +600,14 @@ export async function importView(container, { onDone } = {}) {
                  ? `, ${state.candidates.length} suggested` : "") })),
       el("div", { class: "node-body" }, transfersPanel(refresh)));
 
-    parts.push(unfiledCard, xferCard, coverageCard);
+    const histCard = el("section", { class: "node", dataset: { kind: "budget" } },
+      el("header", { class: "node-head" },
+        el("span", { class: "node-title", text: "Imported files" }),
+        el("div", { class: "spacer" }),
+        el("span", { class: "label", text: "most recent first" })),
+      el("div", { class: "node-body" }, historyPanel(refresh)));
+
+    parts.push(unfiledCard, xferCard, histCard, coverageCard);
     mount(container, ...parts);
   }
 

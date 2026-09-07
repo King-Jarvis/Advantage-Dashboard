@@ -261,6 +261,49 @@ def parse(blob, mapping=None, date_format=None, amount_sign=1):
     return rows, meta
 
 
+def revert_batch(conn, batch_id):
+    """Undo a committed import.
+
+    Filing a statement against the wrong account is an ordinary mistake and
+    was, until now, permanent: a hundred and twenty rows in the wrong place
+    with nothing to do but delete them one at a time.
+
+    Every committed row remembers the transaction it created, so the undo is
+    exact -- it removes what this import added and nothing else. Rows edited
+    since are still removed: they arrived with this file, and leaving a few
+    behind because they were touched would be a stranger outcome than taking
+    the import back whole.
+
+    delete_transaction does the careful part. It takes whole units, so half a
+    transfer or a split parent without its children is never left behind.
+    """
+    from . import ledger
+    row = conn.execute(
+        "SELECT id, state, account_id FROM import_batches WHERE id=?",
+        (batch_id,)).fetchone()
+    if row is None:
+        raise KeyError(batch_id)
+    if row["state"] != "committed":
+        raise ValueError("only a committed import can be undone")
+
+    txns = [r["txn_id"] for r in conn.execute(
+        "SELECT txn_id FROM import_rows WHERE batch_id=? AND txn_id IS NOT NULL",
+        (batch_id,)).fetchall()]
+    removed = 0
+    for tid in txns:
+        removed += ledger.delete_transaction(conn, tid)
+    conn.execute("UPDATE import_rows SET txn_id=NULL WHERE batch_id=?",
+                 (batch_id,))
+    conn.execute("UPDATE import_batches SET state='reverted', rows_imported=0"
+                 " WHERE id=?", (batch_id,))
+    conn.commit()
+    # Coverage is derived from what is actually in the ledger, so it has to be
+    # recomputed or the months this file covered stay marked as covered.
+    refresh_coverage(conn, row["account_id"])
+    return {"batch": batch_id, "transactions_removed": removed,
+            "rows": len(txns)}
+
+
 # ── deduplication ─────────────────────────────────────────────────────────
 def dedup_key(account_id, row, occurrence=0):
     """A stable identity for a statement row.

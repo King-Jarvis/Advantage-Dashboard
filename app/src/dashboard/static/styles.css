@@ -1393,3 +1393,12 @@ textarea.input { resize: vertical; min-height: 5.5rem; line-height: 1.45; }
 .xfer-arrow { color: var(--text-3); }
 .xfer-amt { font-variant-numeric: tabular-nums; flex: none; }
 .xfer-row .pill { margin-left: var(--s2); }
+
+/* Imported files, most recent first, each with a way back. */
+.imphist { display: grid; gap: 0.2rem; }
+.imphist-row {
+  display: flex; align-items: center; gap: var(--s3);
+  padding: var(--s2) 0; border-top: 1px solid var(--line);
+}
+.imphist-row:first-child { border-top: 0; }
+.imphist-name { overflow-wrap: anywhere; }
