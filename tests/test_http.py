@@ -7,6 +7,7 @@ constants, because what matters is what actually reaches the browser.
 import http.client
 import json
 import threading
+import urllib.parse
 
 import pytest
 
@@ -43,7 +44,8 @@ def call(port, method, path, body=None, headers=None):
     raw = r.read()
     try:
         parsed = json.loads(raw) if raw else None
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        # Not every response is text -- the image proxy returns bytes.
         parsed = raw
     return r.status, dict(r.getheaders()), parsed
 
@@ -1207,8 +1209,8 @@ def test_a_message_body_is_fetched_then_served_from_cache(live, tmp_path,
     conn.close()
 
     calls = []
-    monkeypatch.setattr(google_api, "fetch_body",
-                        lambda c, a, u: calls.append(u) or "the text")
+    monkeypatch.setattr(google_api, "fetch_message",
+                        lambda c, a, u: calls.append(u) or ("the text", []))
 
     cookie, _ = login(live)
     status, _, body = call(live, "GET", f"/api/view/message/{mid}",
@@ -1246,7 +1248,7 @@ def test_a_gmail_failure_is_reported_not_swallowed(live, tmp_path, monkeypatch):
 
     def boom(*a, **k):
         raise google_api.GoogleError("Gmail said no")
-    monkeypatch.setattr(google_api, "fetch_body", boom)
+    monkeypatch.setattr(google_api, "fetch_message", boom)
 
     cookie, _ = login(live)
     status, _, body = call(live, "GET", f"/api/view/message/{mid}",
@@ -1275,4 +1277,80 @@ def test_trash_and_spam_reach_the_editor(live, tmp_path, monkeypatch):
     r = conn.execute("SELECT trashed, is_spam, dirty FROM messages").fetchone()
     conn.close()
     assert r["trashed"] == 1 and r["is_spam"] == 1 and r["dirty"] == 1
+    crypt.reset_for_tests()
+
+
+# ── the image proxy, over HTTP ────────────────────────────────────────────
+def test_the_image_endpoint_refuses_an_unsigned_url(live):
+    cookie, _ = login(live)
+    status, _, _ = call(live, "GET",
+                        "/api/image?u=http%3A%2F%2F127.0.0.1%2Fx&s=nope",
+                        headers={"Cookie": cookie})
+    assert status == 403
+
+
+def test_the_image_endpoint_needs_a_session(live):
+    """Signed or not, an unauthenticated fetcher is still a fetcher."""
+    status, _, _ = call(live, "GET", "/api/image?u=https%3A%2F%2Fx%2Fa.jpg&s=x")
+    assert status == 401
+
+
+def test_a_signed_internal_url_is_still_refused(live):
+    """Signing proves we emitted it, not that it is safe to fetch. Both
+    checks have to hold."""
+    from dashboard import imageproxy
+    from dashboard import storage as st
+    conn = st.connect()
+    url = "http://127.0.0.1:8766/api/config"
+    sig = imageproxy.sign(conn, url)
+    conn.close()
+
+    cookie, _ = login(live)
+    status, _, body = call(
+        live, "GET",
+        f"/api/image?u={urllib.parse.quote(url, safe='')}&s={sig}",
+        headers={"Cookie": cookie})
+    assert status == 502 and "inside the network" in str(body)
+
+
+def test_a_signed_public_url_is_fetched(live, monkeypatch):
+    from dashboard import imageproxy
+    from dashboard import storage as st
+    conn = st.connect()
+    url = "https://cdn.example.com/a.png"
+    sig = imageproxy.sign(conn, url)
+    conn.close()
+
+    monkeypatch.setattr(imageproxy, "fetch", lambda u: ("image/png", b"\x89PNG"))
+    cookie, _ = login(live)
+    status, headers, body = call(
+        live, "GET",
+        f"/api/image?u={urllib.parse.quote(url, safe='')}&s={sig}",
+        headers={"Cookie": cookie})
+    assert status == 200
+    assert headers["Content-Type"] == "image/png"
+    assert body == b"\x89PNG"
+
+
+def test_images_can_be_turned_off(live, tmp_path, monkeypatch):
+    from dashboard import crypt, feeds, google_api, settings
+    from dashboard import storage as st
+    acct = _google_account(tmp_path, monkeypatch)
+    conn = st.connect()
+    feeds.upsert_messages(conn, acct, [
+        {"source_uid": "m9", "received_at": "2026-09-01T09:00:00"}])
+    mid = conn.execute("SELECT id FROM messages").fetchone()[0]
+    settings.set_(conn, "load_remote_images", False)
+    conn.close()
+
+    monkeypatch.setattr(google_api, "fetch_message", lambda c, a, u: (
+        "text", [{"t": "img", "src": "https://cdn.example.com/a.jpg", "alt": "hat"}]))
+
+    cookie, _ = login(live)
+    _, _, body = call(live, "GET", f"/api/view/message/{mid}",
+                      headers={"Cookie": cookie})
+    img = next(b for b in body["blocks"] if b["t"] == "img")
+    assert img["blocked"] is True and img["src"] == ""
+    # The address is not handed to the browser either, so nothing can load it.
+    assert "cdn.example.com" not in json.dumps(body)
     crypt.reset_for_tests()

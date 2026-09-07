@@ -38,8 +38,26 @@ if [ "${#FILES[@]}" -eq 0 ]; then
   echo "no tracked files to scan"; exit 0
 fi
 
+# One file is exempt, and only from the generic private-range pattern. The
+# SSRF tests cannot prove the image proxy refuses private addresses without
+# naming private addresses: 192.168.1.1 there is the subject of the test, not
+# a leak of anyone's network. The exemption lives here rather than as an
+# inline ignore so it stays visible and arguable, and it does not extend to
+# 10.191.x -- the LAN this was actually developed on stays blocked everywhere.
+EXEMPT='tests/test_imageproxy.py'
+GENERIC_PRIVATE='192\.168\.[0-9]{1,3}\.[0-9]{1,3}'
+
 for pat in "${PATTERNS[@]}"; do
-  if hits=$(grep -n -E -H "$pat" -- "${FILES[@]}" 2>/dev/null); then
+  if [ "$pat" = "$GENERIC_PRIVATE" ]; then
+    scan=()
+    for f in "${FILES[@]}"; do
+      [ "$f" = "$EXEMPT" ] || scan+=("$f")
+    done
+  else
+    scan=("${FILES[@]}")
+  fi
+  [ ${#scan[@]} -eq 0 ] && continue
+  if hits=$(grep -n -E -H "$pat" -- "${scan[@]}" 2>/dev/null); then
     echo "BLOCKED — host-specific string matching /$pat/:"
     echo "$hits" | sed 's/^/    /'
     status=1

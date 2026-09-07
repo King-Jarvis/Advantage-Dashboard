@@ -58,7 +58,7 @@ export async function inboxView(root, state) {
   let band = state.inboxBand || "all";
   let busy = new Set();
   let openId = null;
-  const bodies = new Map();     // id -> text, so reopening never refetches
+  const bodies = new Map();     // id -> {blocks, body}, so reopening is free
 
   const list = el("div", { class: "mail-list" });
   const status = el("div", { class: "hint" });
@@ -84,6 +84,40 @@ export async function inboxView(root, state) {
     return all.filter((m) => matches(m, b)).length;
   }
 
+  /* Blocks arrive as data and become real nodes here. Nothing is ever parsed
+   * as markup -- a run is text, and a run with an href is an anchor whose
+   * label is that text. That is what turns a wall of bare URLs into
+   * something you can read. */
+  function runs(list) {
+    return (list || []).map((r) => r.h
+      ? el("a", { class: "mail-link", href: r.h, target: "_blank",
+                  rel: "noopener noreferrer nofollow", text: r.s })
+      : document.createTextNode(r.s));
+  }
+
+  function block(b) {
+    if (b.t === "img") {
+      if (b.blocked) {
+        return el("div", { class: "mail-img-off" },
+          el("span", { text: b.alt || "Picture" }),
+          el("span", { class: "hint", text: "pictures are turned off in Settings" }));
+      }
+      if (!b.src) return null;
+      return el("img", {
+        class: "mail-img", src: b.src, alt: b.alt || "",
+        loading: "lazy", decoding: "async",
+      });
+    }
+    if (b.t === "hr") return el("hr", { class: "mail-rule" });
+    if (b.t === "h") return el("h4", { class: "mail-h" }, ...runs(b.runs));
+    if (b.t === "li") {
+      return el("div", { class: "mail-li" },
+        el("span", { class: "mail-bullet", text: "·" }),
+        el("span", {}, ...runs(b.runs)));
+    }
+    return el("p", { class: "mail-p" }, ...runs(b.runs));
+  }
+
   async function openRow(m) {
     // Toggling closed must not clear the cache: reopening is free.
     if (openId === m.id) { openId = null; render(); return; }
@@ -95,12 +129,12 @@ export async function inboxView(root, state) {
     bodies.set(m.id, null);                        // null == in flight
     try {
       const r = await get(`/api/view/message/${m.id}`);
-      bodies.set(m.id, r.body || "");
+      bodies.set(m.id, { blocks: r.blocks || [], body: r.body || "" });
     } catch (err) {
-      bodies.set(m.id,
+      bodies.set(m.id, { blocks: [], error:
         err && err.status === 502
           ? "Gmail would not return this message."
-          : "Could not load this message.");
+          : "Could not load this message." });
     }
     if (openId === m.id) render();
   }
@@ -185,14 +219,26 @@ export async function inboxView(root, state) {
            "Move this to the bin in Gmail?"));
 
     const isOpen = openId === m.id;
-    const body = bodies.get(m.id);
+    const got = bodies.get(m.id);
+
+    function content() {
+      if (got === undefined || got === null) {
+        return el("p", { class: "hint", text: "Loading…" });
+      }
+      if (got.error) return el("p", { class: "hint err", text: got.error });
+      if (got.blocks && got.blocks.length) {
+        // The rich form: pictures, headings, and links wearing their own
+        // labels rather than their addresses.
+        return el("div", { class: "mail-rich" },
+          ...got.blocks.map(block).filter(Boolean));
+      }
+      if (got.body) return el("pre", { class: "mail-text", text: got.body });
+      return el("p", { class: "hint", text: "This message has no text — "
+        + "it may be an image or an attachment." });
+    }
+
     const expanded = !isOpen ? null : el("div", { class: "mail-open" },
-      body === undefined || body === null
-        ? el("p", { class: "hint", text: "Loading…" })
-        : body === ""
-          ? el("p", { class: "hint", text: "This message has no text — "
-              + "it may be an image or an attachment." })
-          : el("pre", { class: "mail-text", text: body }),
+      content(),
       el("div", { class: "mail-open-foot" },
         el("a", { class: "btn", href: gmailLink(m), target: "_blank",
                   rel: "noopener noreferrer", text: "Open in Gmail" }),

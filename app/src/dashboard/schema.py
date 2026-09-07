@@ -9,7 +9,7 @@ operation is not optional.
 """
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # Foreign keys are off by default in SQLite and must be enabled per
 # connection, not once per database. Enforced in storage.connect().
@@ -335,6 +335,8 @@ ADDED_COLUMNS = [
     ("messages", "body_text", "TEXT"),
     ("messages", "body_fetched_at", "TEXT"),
     ("messages", "push_error", "TEXT NOT NULL DEFAULT ''"),
+    # The structured form of the body: headings, paragraphs, images.
+    ("messages", "body_blocks", "TEXT"),
     # Why a push failed, and an intent to delete that survives until it lands.
     ("events", "push_error", "TEXT NOT NULL DEFAULT ''"),
     ("events", "pending_delete", "INTEGER NOT NULL DEFAULT 0"),

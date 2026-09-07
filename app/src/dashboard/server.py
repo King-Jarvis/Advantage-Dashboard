@@ -24,6 +24,7 @@ from . import (
     feeds,
     firstrun,
     google_api,
+    imageproxy,
     security,
     settings,
     statements,
@@ -77,6 +78,8 @@ ROUTES = [
     ("agenda",   {"GET"},         re.compile(r"^/api/view/agenda$"),       "session"),
     ("calendar", {"GET"},         re.compile(r"^/api/view/calendar$"),     "session"),
     ("inbox",    {"GET"},         re.compile(r"^/api/view/inbox$"),        "session"),
+    # Signed, so this can never become an open proxy on the home network.
+    ("image",    {"GET"},         re.compile(r"^/api/image$"),             "session"),
     ("msgbody",  {"GET"},
      re.compile(r"^/api/view/message/([0-9a-f]{32})$"),                      "session"),
     ("syncst",   {"GET"},         re.compile(r"^/api/view/status$"),       "session"),
@@ -501,16 +504,47 @@ class Handler(BaseHTTPRequestHandler):
                        "accounts": settings.list_google_accounts(conn)})
 
     def api_msgbody(self, conn, session, message_id):
-        """One message's text. Fetched from Gmail the first time, then kept."""
+        """One message, as text and as blocks. Fetched once, then kept."""
         def fetch(account_id, source_uid):
-            return google_api.fetch_body(conn, account_id, source_uid)
+            return google_api.fetch_message(conn, account_id, source_uid)
         try:
-            text, cached = feeds.message_body(conn, message_id, fetch)
+            text, blocks, cached = feeds.message_body(conn, message_id, fetch)
         except KeyError:
             return self.fail(404, "no such message")
         except google_api.GoogleError as e:
             return self.fail(502, str(e))
-        self.json_out({"id": message_id, "body": text, "cached": cached})
+
+        # Image sources are rewritten here rather than at parse time: the
+        # signature depends on a key this process holds, and a stored URL
+        # would be stale the moment that key changed.
+        show = settings.get(conn, "load_remote_images")
+        out = []
+        for b in blocks:
+            if b.get("t") == "img":
+                src = b.get("src", "")
+                if src.startswith("data:"):
+                    out.append(b)
+                elif show:
+                    out.append({**b, "src": imageproxy.signed_path(conn, src)})
+                else:
+                    out.append({**b, "src": "", "blocked": True})
+            else:
+                out.append(b)
+        self.json_out({"id": message_id, "body": text, "blocks": out,
+                       "cached": cached, "images_on": bool(show)})
+
+    def api_image(self, conn, session):
+        q = self.query()
+        url = (q.get("u") or [""])[0]
+        if not imageproxy.verify(conn, url, (q.get("s") or [""])[0]):
+            # Not "wrong signature" -- an attacker learns nothing from a
+            # refusal that does not distinguish its reasons.
+            return self.fail(403, "not allowed")
+        try:
+            ctype, data = imageproxy.fetch(url)
+        except imageproxy.Refused as e:
+            return self.fail(502, str(e))
+        self._send(200, data, ctype, {"Cache-Control": "private, max-age=86400"})
 
     def api_editmsg(self, conn, session, message_id):
         data = self.body_json()

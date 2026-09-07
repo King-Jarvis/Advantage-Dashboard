@@ -268,9 +268,9 @@ def test_a_body_is_fetched_once_and_then_remembered(conn, acct):
         calls.append(source_uid)
         return "the body"
 
-    text, cached = feeds.message_body(conn, mid, fetch)
+    text, blocks, cached = feeds.message_body(conn, mid, fetch)
     assert text == "the body" and cached is False
-    text, cached = feeds.message_body(conn, mid, fetch)
+    text, blocks, cached = feeds.message_body(conn, mid, fetch)
     assert text == "the body" and cached is True
     assert calls == ["m1"], "fetched twice"
 
@@ -289,7 +289,7 @@ def test_an_empty_body_is_still_remembered(conn, acct):
 def test_no_fetcher_means_no_network(conn, acct):
     feeds.upsert_messages(conn, acct, [msg("m3", "2026-09-01T09:00:00")])
     mid = conn.execute("SELECT id FROM messages").fetchone()[0]
-    assert feeds.message_body(conn, mid) == ("", False)
+    assert feeds.message_body(conn, mid) == ("", [], False)
 
 
 def test_an_unknown_message_raises(conn):

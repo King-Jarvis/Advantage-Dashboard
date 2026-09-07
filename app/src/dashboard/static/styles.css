@@ -964,3 +964,47 @@ a:hover { text-decoration: underline; }
 @media (max-width: 620px) {
   .mail-text { font-size: 0.78rem; max-height: 22rem; }
 }
+
+/* ── A message rendered from blocks ────────────────────────────────────────
+ * Marketing email is laid out for a 600px table and will happily be 2000px
+ * wide if allowed. Everything here is clamped to the column instead, so a
+ * newsletter reads like a page rather than something to scroll sideways.
+ */
+.mail-rich {
+  padding: 0.9rem 1rem; background: var(--canvas);
+  border: 1px solid var(--line); border-radius: 8px;
+  max-height: 40rem; overflow-y: auto;
+  line-height: 1.55; font-size: 0.88rem;
+}
+.mail-rich > * + * { margin-top: 0.55rem; }
+.mail-p { margin: 0; overflow-wrap: anywhere; }
+.mail-h {
+  margin: 1.1rem 0 0; font-size: 1rem; font-weight: 620; color: var(--text);
+  letter-spacing: 0.01em;
+}
+.mail-rich > .mail-h:first-child { margin-top: 0; }
+.mail-li { display: flex; gap: 0.5em; margin: 0; }
+.mail-bullet { color: var(--text-3); flex: none; }
+.mail-rule { border: 0; border-top: 1px solid var(--line); margin: 0.9rem 0; }
+
+/* A link shows what it is, not where it goes. The address is still in the
+ * status bar on hover, which is where a browser has always put it. */
+.mail-link { color: var(--info); text-decoration: none; overflow-wrap: anywhere; }
+.mail-link:hover { text-decoration: underline; }
+
+.mail-img {
+  display: block; max-width: 100%; height: auto; border-radius: 6px;
+  /* A chequerboard behind transparent product shots, so a white-on-white PNG
+   * is not an invisible gap. */
+  background: repeating-conic-gradient(var(--surface-2) 0% 25%,
+              var(--surface) 0% 50%) 0 0 / 14px 14px;
+}
+.mail-img-off {
+  display: flex; flex-direction: column; gap: 0.15rem;
+  padding: 0.6rem 0.75rem; border: 1px dashed var(--line-lit);
+  border-radius: 6px; color: var(--text-3); font-size: 0.82rem;
+}
+
+@media (max-width: 620px) {
+  .mail-rich { max-height: 26rem; font-size: 0.84rem; padding: 0.7rem; }
+}

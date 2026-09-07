@@ -38,6 +38,12 @@ SPEC = {
     # forty. A filter nobody can see is indistinguishable from a broken feed.
     "inbox_min_importance": ("int", 2, "Only show mail scoring at least this"),
 
+    # Images are fetched by the dashboard, never by your browser, so the
+    # sender learns that Eva asked and nothing about your device. Opening a
+    # message still tells them it was opened, which is why this can go off.
+    "load_remote_images": ("bool", True,
+                           "Show pictures in email, fetched via the dashboard"),
+
     "anthropic_api_key": ("secret", "", "Enables the model-backed features"),
     # Google builds the redirect URI from this, so it must match how you
     # actually reach the dashboard -- and Google will not accept a raw IP.
@@ -72,6 +78,7 @@ LABELS = {
     "mail_poll_seconds": "Mail check (seconds)",
     "calendar_poll_seconds": "Calendar check (seconds)",
     "inbox_min_importance": "Inbox importance threshold",
+    "load_remote_images": "Show pictures in email",
     "anthropic_api_key": "Anthropic API key",
     "base_url": "Dashboard address",
     "google_client_id": "Google client ID",

@@ -10,6 +10,7 @@ Ingest is idempotent on (account, provider id), so replaying a sync repairs
 rather than duplicates.
 """
 
+import json
 import time
 import uuid
 
@@ -227,25 +228,42 @@ def set_message(conn, message_id, **fields):
 
 
 def message_body(conn, message_id, fetch=None):
-    """The body text, fetched once and remembered.
+    """The body as (text, blocks, cached), fetched once and remembered.
 
     `fetch` is injected so the caller supplies the network, which keeps this
     module free of Google and keeps the tests free of the network.
     """
     row = conn.execute(
-        "SELECT id, account_id, source_uid, body_text, body_fetched_at"
+        "SELECT id, account_id, source_uid, body_text, body_blocks"
         " FROM messages WHERE id=? AND deleted=0", (message_id,)).fetchone()
     if row is None:
         raise KeyError(message_id)
     if row["body_text"] is not None:
-        return row["body_text"], True
+        return row["body_text"], _blocks(row["body_blocks"]), True
     if fetch is None:
-        return "", False
-    text = fetch(row["account_id"], row["source_uid"]) or ""
-    conn.execute("UPDATE messages SET body_text=?, body_fetched_at=? WHERE id=?",
-                 (text, _now(), message_id))
+        return "", [], False
+
+    got = fetch(row["account_id"], row["source_uid"])
+    # Accept either form so an older caller that returns just text still
+    # works rather than storing the string one character per block.
+    text, blocks = got if isinstance(got, tuple) else (got or "", [])
+    conn.execute(
+        "UPDATE messages SET body_text=?, body_blocks=?, body_fetched_at=?"
+        " WHERE id=?",
+        (text or "", json.dumps(blocks, separators=(",", ":")), _now(),
+         message_id))
     conn.commit()
-    return text, False
+    return text or "", blocks, False
+
+
+def _blocks(raw):
+    if not raw:
+        return []
+    try:
+        got = json.loads(raw)
+        return got if isinstance(got, list) else []
+    except (TypeError, ValueError):
+        return []
 
 
 # ── sync bookkeeping ──────────────────────────────────────────────────────

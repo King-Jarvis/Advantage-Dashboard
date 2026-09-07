@@ -19,7 +19,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from . import auth_google, crypt, mailtext, settings
+from . import auth_google, crypt, mailparts, mailtext, settings
 
 CAL_URL = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
 GMAIL_LIST = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
@@ -293,6 +293,19 @@ def fetch_events(conn, account_id, days_back=1, days_ahead=21):
 
 
 # ── mail ──────────────────────────────────────────────────────────────────
+def fetch_message(conn, account_id, source_uid):
+    """One message as (text, blocks), from a single request.
+
+    Both forms come from the same payload: fetching twice would double the
+    quota cost to produce two views of identical bytes.
+    """
+    full = _get_retrying(conn, account_id,
+                         GMAIL_GET % urllib.parse.quote(source_uid),
+                         {"format": "full"})
+    payload = full.get("payload") or {}
+    return mailtext.from_payload(payload), mailparts.blocks_from_payload(payload)
+
+
 def fetch_body(conn, account_id, source_uid):
     """The readable text of one message, fetched in full.
 
