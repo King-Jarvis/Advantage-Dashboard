@@ -2216,3 +2216,25 @@ def test_the_ledger_tree_can_span_every_month(live):
                    for g in a["groups"] for c in g["categories"])
     assert count(one) == 1 and count(all_) == 2
     assert all_["month"] is None
+
+
+def test_the_batch_list_says_which_account_each_went_to(live):
+    """The import screen defaults its account picker to whatever was imported
+    last, and a name cannot select an option."""
+    from dashboard import ledger
+    from dashboard import statements as st
+    from dashboard import storage as store
+    conn = store.connect()
+    acct = ledger.create_account(conn, "Everyday Checking")
+    conn.close()
+    cookie, _ = login(live)
+    conn = store.connect()
+    bid, _ = st.create_batch(conn, acct, "aug.csv",
+                             b"date,description,amount\n2026-08-01,Tesco,-12.00\n")
+    st.commit_batch(conn, bid)
+    conn.close()
+
+    _, _, d = call(live, "GET", "/api/import/batches", headers={"Cookie": cookie})
+    b = d["batches"][0]
+    assert b["account_id"] == acct
+    assert b["account"] == "Everyday Checking"

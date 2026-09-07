@@ -1234,7 +1234,10 @@ class Handler(BaseHTTPRequestHandler):
         rows = conn.execute(
             "SELECT b.id, b.filename, b.uploaded_at, b.period_start,"
             " b.period_end, b.rows_total, b.rows_duplicate, b.rows_imported,"
-            " b.state, a.name account FROM import_batches b"
+            # account_id as well as the name: the screen defaults the account
+            # picker to whatever was imported last, and a name cannot select
+            # an option.
+            " b.state, b.account_id, a.name account FROM import_batches b"
             " JOIN accounts a ON a.id = b.account_id"
             " ORDER BY b.uploaded_at DESC LIMIT 25").fetchall()
         self.json_out({"batches": [dict(r) for r in rows]})

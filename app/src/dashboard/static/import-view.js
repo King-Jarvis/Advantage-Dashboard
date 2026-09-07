@@ -17,7 +17,7 @@ const state = {
   addingAccount: false,
   unfiled: [], allCats: [], unfiledBand: "in", showFiled: false,
   tracking: [], transfers: [], candidates: [], history: [],
-  historyOpen: false, transfersOpen: null,
+  historyOpen: false, transfersOpen: null, lastAccount: null,
 };
 
 function fmtRange(a, b) {
@@ -376,6 +376,25 @@ export async function importView(container, { onDone } = {}) {
     accountSel.append(el("option", { value: a.id,
       text: a.on_budget ? a.name : `${a.name} (off budget)` }));
   }
+  /* Where you were, not where the alphabet starts.
+   *
+   * Statements arrive one account at a time and in runs -- six months of the
+   * same account, then six of the next. Resetting to whichever name sorts
+   * first means picking the account again on every file, and picking it wrong
+   * is silent until the spending fails to appear in any envelope.
+   *
+   * Within a session, whatever you last chose. Across a restart, the account
+   * of the most recent import, which is the same answer arrived at from the
+   * data rather than from memory.
+   */
+  const remembered = state.lastAccount
+    || (state.history.find((b) => b.state === "committed") || {}).account_id;
+  if (remembered && state.accounts.some((a) => a.id === remembered)) {
+    accountSel.value = remembered;
+  }
+  accountSel.addEventListener("change", () => {
+    state.lastAccount = accountSel.value;
+  });
 
   /* Somewhere to make the first one. The endpoint has always existed and
    * nothing called it, so an empty ledger left this screen with an empty
@@ -495,7 +514,7 @@ export async function importView(container, { onDone } = {}) {
     try {
       const f = file.files[0];
       const res = await post(
-        `/api/import/upload?account=${accountSel.value}`
+        `/api/import/upload?account=${(state.lastAccount = accountSel.value)}`
         + `&filename=${encodeURIComponent(f.name)}`, await f.arrayBuffer());
       const d = await get(`/api/import/batch/${res.batch_id}`);
       state.batch = d.batch;

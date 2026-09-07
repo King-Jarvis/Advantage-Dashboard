@@ -943,6 +943,13 @@ a:hover { text-decoration: underline; }
 .iconbtn:hover { background: var(--surface-3); color: var(--text); }
 .iconbtn.on { color: var(--warn); }
 
+/* Narrow: the button drops to its own full-width line rather than being
+ * squeezed to nothing beside a long account name. */
+@media (max-width: 560px) {
+  .xfer-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .xfer-row > button { grid-column: 1 / -1; }
+}
+
 @media (max-width: 620px) {
   .mail-row { grid-template-columns: 2.6rem 1fr; padding: 0.6rem; }
   .mail-word { display: none; }
@@ -1385,13 +1392,19 @@ textarea.input { resize: vertical; min-height: 5.5rem; line-height: 1.45; }
  * design, so without a place of its own it is simply invisible. */
 .xfers { display: grid; gap: 0.35rem; }
 .xferhead { margin-top: var(--s4); }
+/* Three columns, not a wrapping row. The amount and the button then sit in
+ * the same place on every line, so a column of Links can be worked down
+ * without hunting for each one -- which is what wrapping produced, since the
+ * button moved with the length of the account names beside it. */
 .xfer-row {
-  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  display: grid; align-items: center; gap: var(--s3);
+  grid-template-columns: minmax(0, 1fr) minmax(5.5rem, auto) 5.5rem;
   padding: var(--s2) 0; border-top: 1px solid var(--line);
 }
+.xfer-row > button { width: 100%; }
 .xfer-acct { font-weight: 550; }
 .xfer-arrow { color: var(--text-3); }
-.xfer-amt { font-variant-numeric: tabular-nums; flex: none; }
+.xfer-amt { font-variant-numeric: tabular-nums; text-align: right; }
 .xfer-row .pill { margin-left: var(--s2); }
 
 /* Imported files, most recent first, each with a way back. */
