@@ -493,6 +493,8 @@ export async function budgetView(container, month, onMonth) {
   // in each envelope -- and answering both at once makes neither legible.
   if (state.organising) {
     return ledgerView(container, {
+      // Its starting point only: the screen has its own month control, and
+      // handing it this one on every render would undo each change.
       month,
       onBack: () => {
         state.organising = false;

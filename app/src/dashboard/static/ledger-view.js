@@ -5,22 +5,62 @@
  * whole file went to the wrong account", "those belong under Bills", "that
  * one is not groceries": each level answers a different mistake.
  *
+ * Every level folds. Four hundred rows opened flat is not a hierarchy, it is
+ * a list with headings in it, and the point of the arrangement is to be able
+ * to ignore most of it.
+ *
  * A change re-reads the tree rather than moving the row in place. Moving it
  * locally would be faster and would eventually disagree with the database
- * about where things are, which on a screen whose entire job is showing where
- * things are is the one bug worth spending a round trip to avoid.
- *
- * Deleting is behind a toggle. It is rare, it is the only irreversible thing
- * here, and a delete control on four hundred rows is four hundred chances to
- * hit the wrong one.
+ * about where things are, which on a screen whose whole job is showing where
+ * things are is the one bug worth a round trip to avoid.
  */
 import { api, get, patch } from "./api.js";
 import { el, money, moneyEl, mount } from "./dom.js";
 
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July",
+                "August", "September", "October", "November", "December"];
+
+const FILTERS = [
+  { id: "all", label: "Everything", test: () => true },
+  { id: "unfiled", label: "No category", test: (r) => !r.category_id },
+  { id: "transfers", label: "Transfers", test: (r) => r.is_transfer },
+  { id: "in", label: "Money in", test: (r) => r.amount_cents > 0 },
+  { id: "out", label: "Money out", test: (r) => r.amount_cents < 0 },
+];
+
 const state = {
   month: null, tree: [], accounts: [], categories: [],
-  deleting: false, busy: false, error: "", note: "",
+  deleting: false, error: "", note: "",
+  query: "", filter: "all",
+  // Which nodes are open, by path. A Set rather than a flag on the node,
+  // because the tree is rebuilt on every change and anything stored on it
+  // would be lost exactly when the screen re-drew.
+  open: new Set(),
 };
+
+function monthLabel(m) {
+  if (!m) return "Every month";
+  const [y, mo] = m.split("-");
+  return `${MONTHS[Number(mo) - 1]} ${y}`;
+}
+
+function shiftMonth(m, by) {
+  const [y, mo] = m.split("-").map(Number);
+  const d = new Date(y, mo - 1 + by, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function matches(r) {
+  const f = FILTERS.find((x) => x.id === state.filter) || FILTERS[0];
+  if (!f.test(r)) return false;
+  const q = state.query.trim().toLowerCase();
+  if (!q) return true;
+  // Amount as well as payee: "13.30" is how you look for a charge you can see
+  // on a statement but cannot name.
+  return (r.payee || "").toLowerCase().includes(q)
+      || money(r.amount_cents).toLowerCase().includes(q)
+      || r.date.includes(q);
+}
 
 function categoryOptions(selected) {
   const byGroup = new Map();
@@ -30,8 +70,6 @@ function categoryOptions(selected) {
   }
   const opts = [el("option", { value: "", text: "— no category —" })];
   for (const [gname, cats] of byGroup) {
-    // optgroup so the group a category belongs to is visible while choosing,
-    // which is half of what makes a wrong one obvious.
     const og = el("optgroup", { label: gname });
     for (const c of cats) {
       const o = el("option", { value: c.id,
@@ -104,8 +142,28 @@ function row(r, reload) {
     cat, acct);
 }
 
+/* A folding level. Searching forces it open: a hit buried inside something
+ * collapsed is the same as no hit at all. */
+function fold(path, title, count, total, kids, cls) {
+  const searching = Boolean(state.query.trim());
+  const node = el("details", { class: cls });
+  if (searching || state.open.has(path)) node.setAttribute("open", "");
+  node.append(
+    el("summary", {},
+      el("span", { class: "foldname", text: title }),
+      el("span", { class: "hint",
+        text: ` · ${count} row${count === 1 ? "" : "s"}` }),
+      moneyEl(total, "foldtotal")),
+    ...kids);
+  node.addEventListener("toggle", () => {
+    if (node.open) state.open.add(path);
+    else state.open.delete(path);
+  });
+  return node;
+}
+
 export async function ledgerView(container, { month, onBack } = {}) {
-  state.month = month || state.month;
+  if (state.month === null && month) state.month = month;
 
   async function reload() {
     const q = state.month ? `?month=${encodeURIComponent(state.month)}` : "";
@@ -114,6 +172,46 @@ export async function ledgerView(container, { month, onBack } = {}) {
     state.accounts = d.accounts || [];
     state.categories = d.categories || [];
     render();
+  }
+
+  function setMonth(m) {
+    state.month = m;
+    state.note = state.error = "";
+    return reload();
+  }
+
+  function controls() {
+    const search = el("input", {
+      class: "input", type: "search", value: state.query,
+      placeholder: "Find a payee, amount or date…",
+      "aria-label": "Search transactions",
+    });
+    // Filtering as you type, because the alternative is typing, pressing a
+    // button, and forgetting which of the two you changed.
+    search.addEventListener("input", () => { state.query = search.value; render(); });
+
+    return el("div", { class: "lcontrols" },
+      el("div", { class: "row wrap" },
+        el("button", { class: "btn ghost", type: "button", text: "‹",
+          "aria-label": "Previous month",
+          disabled: !state.month || null,
+          onclick: () => setMonth(shiftMonth(state.month, -1)) }),
+        el("span", { class: "lmonth", text: monthLabel(state.month) }),
+        el("button", { class: "btn ghost", type: "button", text: "›",
+          "aria-label": "Next month",
+          disabled: !state.month || null,
+          onclick: () => setMonth(shiftMonth(state.month, 1)) }),
+        el("button", { class: "btn", type: "button",
+          text: state.month ? "Every month" : "This month only",
+          onclick: () => setMonth(state.month ? null
+            : new Date().toISOString().slice(0, 7)) })),
+      search,
+      el("div", { class: "chips" }, ...FILTERS.map((f) => el("button", {
+        type: "button",
+        class: "chip" + (f.id === state.filter ? " on" : ""),
+        "aria-pressed": f.id === state.filter ? "true" : "false",
+        onclick: () => { state.filter = f.id; render(); },
+      }, el("span", { text: f.label })))));
   }
 
   function render() {
@@ -128,7 +226,7 @@ export async function ledgerView(container, { month, onBack } = {}) {
           onchange: () => { state.deleting = !state.deleting; render(); } }),
         el("span", { text: "Allow deleting" })));
 
-    const body = [];
+    const body = [controls()];
     if (state.error) body.push(el("div", { class: "error", text: state.error }));
     if (state.note) body.push(el("div", { class: "pill ok", text: state.note }));
     if (state.deleting) {
@@ -138,20 +236,38 @@ export async function ledgerView(container, { month, onBack } = {}) {
             + "instead." }));
     }
 
-    if (!state.tree.length) {
-      body.push(el("div", { class: "hint pad", text: "Nothing in this month." }));
-    }
+    let shown = 0;
     for (const a of state.tree) {
-      const groups = a.groups.map((g) => el("div", { class: "lgroup" },
-        el("div", { class: "lgroup-name", text: g.name }),
-        ...g.categories.map((c) => el("div", { class: "lcat" },
-          el("div", { class: "lcat-name" },
-            el("span", { text: c.name }),
-            el("span", { class: "hint",
-              text: ` · ${c.rows.length} row${c.rows.length === 1 ? "" : "s"}` })),
-          ...c.rows.map((r) => row(r, reload))))));
-      body.push(el("div", { class: "lacct" },
-        el("div", { class: "lacct-name", text: a.name }), ...groups));
+      const groupNodes = [];
+      let acctCount = 0, acctTotal = 0;
+      for (const g of a.groups) {
+        const catNodes = [];
+        let grpCount = 0, grpTotal = 0;
+        for (const c of g.categories) {
+          const rows = c.rows.filter(matches);
+          if (!rows.length) continue;
+          const total = rows.reduce((n, r) => n + r.amount_cents, 0);
+          grpCount += rows.length;
+          grpTotal += total;
+          catNodes.push(fold(`${a.id}/${g.id}/${c.id}`, c.name, rows.length,
+                             total, rows.map((r) => row(r, reload)), "lcat"));
+        }
+        if (!catNodes.length) continue;
+        acctCount += grpCount;
+        acctTotal += grpTotal;
+        groupNodes.push(fold(`${a.id}/${g.id}`, g.name, grpCount, grpTotal,
+                             catNodes, "lgroup"));
+      }
+      if (!groupNodes.length) continue;
+      shown += acctCount;
+      body.push(fold(a.id, a.name, acctCount, acctTotal, groupNodes, "lacct"));
+    }
+
+    if (!shown) {
+      body.push(el("div", { class: "hint pad",
+        text: state.query || state.filter !== "all"
+          ? "Nothing matches that."
+          : "Nothing in this month." }));
     }
 
     mount(container, el("section", { class: "node", dataset: { kind: "budget" } },

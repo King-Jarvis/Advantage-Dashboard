@@ -2192,3 +2192,27 @@ def test_deleting_something_that_is_not_there(live):
     status, _, _ = call(live, "DELETE", "/api/edit/transaction/" + "0" * 32,
                         headers={"Cookie": cookie, "X-CSRF-Token": csrf})
     assert status == 404
+
+
+def test_the_ledger_tree_can_span_every_month(live):
+    """The month control offers "every month", so the endpoint has to answer
+    without one -- a search for a charge you cannot date is the whole reason."""
+    from dashboard import ledger
+    from dashboard import storage as st
+    conn = st.connect()
+    acct = ledger.create_account(conn, "Checking")
+    ledger.add_transaction(conn, acct, "2026-06-01", -100, "June thing")
+    ledger.add_transaction(conn, acct, "2026-09-01", -200, "September thing")
+    conn.close()
+
+    cookie, _ = login(live)
+    _, _, one = call(live, "GET", "/api/view/ledger?month=2026-09",
+                     headers={"Cookie": cookie})
+    _, _, all_ = call(live, "GET", "/api/view/ledger",
+                      headers={"Cookie": cookie})
+
+    def count(d):
+        return sum(len(c["rows"]) for a in d["tree"]
+                   for g in a["groups"] for c in g["categories"])
+    assert count(one) == 1 and count(all_) == 2
+    assert all_["month"] is None

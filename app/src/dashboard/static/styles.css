@@ -1403,22 +1403,41 @@ textarea.input { resize: vertical; min-height: 5.5rem; line-height: 1.45; }
 .imphist-row:first-child { border-top: 0; }
 .imphist-name { overflow-wrap: anywhere; }
 
-/* Where things are filed: account, then group, then category, then the rows.
- * The indentation is the argument -- it shows what belongs to what before a
- * word is read. */
-.lacct { margin-top: var(--s5); }
-.lacct:first-child { margin-top: 0; }
-.lacct-name {
+/* Where things are filed. The indentation is the argument: it shows what
+ * belongs to what before a word is read, and every level folds because four
+ * hundred rows opened flat is a list with headings, not a hierarchy. */
+.lcontrols {
+  display: grid; gap: var(--s2); padding-bottom: var(--s3);
+  border-bottom: 1px solid var(--line); margin-bottom: var(--s3);
+}
+.lcontrols .row { align-items: center; }
+.lmonth { font-weight: 600; min-width: 9em; text-align: center; }
+.lcontrols input[type="search"] { width: 100%; }
+
+.lacct, .lgroup, .lcat { border-left: 2px solid transparent; }
+.lacct > summary, .lgroup > summary, .lcat > summary {
+  cursor: pointer; display: flex; align-items: baseline; gap: 0.4em;
+  padding: 0.3em 0;
+}
+.lacct > summary .foldname {
   font-size: var(--t-lg); font-weight: 600;
-  padding-bottom: var(--s2); border-bottom: 2px solid var(--line-lit);
 }
-.lgroup { margin-top: var(--s4); padding-left: var(--s3); }
-.lgroup-name {
+.lacct { margin-top: var(--s4); border-bottom: 1px solid var(--line-lit); }
+.lgroup {
+  margin-left: var(--s3); border-left-color: var(--line);
+  padding-left: var(--s2);
+}
+.lgroup > summary .foldname {
   font-size: var(--t-label); text-transform: uppercase;
-  letter-spacing: var(--track); color: var(--text-3);
+  letter-spacing: var(--track); color: var(--text-2);
 }
-.lcat { margin-top: var(--s3); padding-left: var(--s3); }
-.lcat-name { font-weight: 550; padding-bottom: 0.15rem; }
+.lcat {
+  margin-left: var(--s3); border-left-color: var(--line);
+  padding-left: var(--s2);
+}
+.lcat > summary .foldname { font-weight: 550; }
+.foldtotal { margin-left: auto; font-variant-numeric: tabular-nums; }
+
 .lrow {
   display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap;
   padding: 0.3rem 0 0.3rem var(--s3);
@@ -1435,7 +1454,9 @@ textarea.input { resize: vertical; min-height: 5.5rem; line-height: 1.45; }
 }
 @media (max-width: 720px) {
   .lrow .input { flex: 1 1 100%; }
-  .lgroup, .lcat { padding-left: var(--s2); }
+  .lgroup, .lcat { margin-left: var(--s2); }
+}
+
 }
 
 /* Imported files: a record rather than work waiting, so it stays folded until
