@@ -353,7 +353,7 @@ def update_transaction(conn, txn_id, **fields):
     category.
     """
     allowed = {"date", "amount_cents", "payee", "notes", "category_id",
-               "cleared", "reconciled"}
+               "cleared", "reconciled", "account_id"}
     bad = set(fields) - allowed
     if bad:
         raise ValueError("cannot update: %s" % ", ".join(sorted(bad)))
@@ -364,12 +364,31 @@ def update_transaction(conn, txn_id, **fields):
         raise KeyError(txn_id)
     if row["transfer_id"] and "category_id" in fields and fields["category_id"]:
         raise ValueError("a transfer cannot be categorised")
+    if "account_id" in fields:
+        # A statement row filed against the wrong account is the reason this
+        # is editable at all. The two shapes it must not break: a transfer
+        # would end up with both halves in one account, and a split's children
+        # must stay with their parent -- an invariant checked at teardown.
+        if row["transfer_id"]:
+            raise ValueError("unlink the transfer first, then move each half")
+        if row["parent_id"]:
+            raise ValueError("move the whole split, not one part of it")
+        if conn.execute("SELECT 1 FROM accounts WHERE id=?",
+                        (fields["account_id"],)).fetchone() is None:
+            raise KeyError(fields["account_id"])
     if row["reconciled"] and ("amount_cents" in fields or "date" in fields):
         raise ValueError("reconciled transactions cannot change amount or date")
 
     has_children = conn.execute(
         "SELECT COUNT(*) c FROM transactions WHERE parent_id=? AND deleted=0",
         (txn_id,)).fetchone()["c"] > 0
+
+    if "account_id" in fields and has_children:
+        # Children follow the parent, or the split spans two accounts and the
+        # money stops adding up in both.
+        conn.execute("UPDATE transactions SET account_id=?, updated_at=?"
+                     " WHERE parent_id=?",
+                     (fields["account_id"], _now(), txn_id))
 
     if "amount_cents" in fields:
         if not isinstance(fields["amount_cents"], int):
@@ -730,6 +749,72 @@ def transfers(conn, limit=200):
             "enters_budget": not bool(r["on_budget"]) and bool(other["on_budget"]),
         })
     return out
+
+
+def ledger_tree(conn, month=None, limit=1500):
+    """Every transaction, arranged the way it is thought about.
+
+    Account, then group, then category, then the rows. That order is not
+    arbitrary: it is the order in which a thing is wrong. "That whole file
+    went to the wrong account", "those belong under Bills", "that one is not
+    groceries" -- each level answers a different mistake.
+
+    Split children are shown and their parents are not: the parent carries no
+    category, so it has no place in this arrangement, while its parts do.
+    """
+    where = ["t.deleted=0"]
+    args = []
+    if month:
+        where.append("substr(t.date,1,7)=?")
+        args.append(month)
+    rows = conn.execute(
+        "SELECT t.id, t.date, t.amount_cents, t.payee, t.category_id,"
+        "       t.account_id, t.parent_id, t.transfer_id,"
+        "       a.name account, c.name category, c.group_id,"
+        "       g.name group_name"
+        " FROM transactions t"
+        " JOIN accounts a ON a.id = t.account_id"
+        " LEFT JOIN categories c ON c.id = t.category_id"
+        " LEFT JOIN category_groups g ON g.id = c.group_id"
+        " WHERE " + " AND ".join(where) +
+        "   AND t.id NOT IN (SELECT parent_id FROM transactions"
+        "                    WHERE parent_id IS NOT NULL AND deleted=0)"
+        " ORDER BY a.name, g.sort, g.name, c.sort, c.name, t.date DESC"
+        " LIMIT ?", [*args, limit]).fetchall()
+
+    tree = {}
+    for r in rows:
+        acct = tree.setdefault(r["account_id"], {
+            "id": r["account_id"], "name": r["account"], "groups": {}})
+        # Uncategorised and transfers have no group or category of their own,
+        # and hiding them here would make the screen disagree with the ledger.
+        gid = r["group_id"] or ("__transfer" if r["transfer_id"] else "__none")
+        gname = r["group_name"] or (
+            "Transfers" if r["transfer_id"] else "No category")
+        grp = acct["groups"].setdefault(gid, {
+            "id": gid, "name": gname, "categories": {}})
+        cid = r["category_id"] or gid
+        cname = r["category"] or gname
+        cat = grp["categories"].setdefault(cid, {
+            "id": r["category_id"], "name": cname, "rows": []})
+        cat["rows"].append({
+            "id": r["id"], "date": r["date"], "payee": r["payee"],
+            "amount_cents": r["amount_cents"],
+            "category_id": r["category_id"], "account_id": r["account_id"],
+            "is_transfer": bool(r["transfer_id"]),
+            "is_split_part": bool(r["parent_id"]),
+        })
+
+    def listify(node, key):
+        node[key] = sorted(node[key].values(), key=lambda x: x["name"])
+        return node
+
+    out = []
+    for acct in tree.values():
+        for grp in acct["groups"].values():
+            listify(grp, "categories")
+        out.append(listify(acct, "groups"))
+    return sorted(out, key=lambda a: a["name"])
 
 
 def payee_groups(conn, filed=False, limit=300):

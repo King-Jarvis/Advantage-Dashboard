@@ -2121,3 +2121,74 @@ def test_a_transfer_can_be_unlinked_over_http(live):
     conn = st.connect()
     assert conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0] == 2
     conn.close()
+
+
+# ── where things are filed ────────────────────────────────────────────────
+def test_the_ledger_tree_nests_account_group_category(live):
+    """The order is the order in which a thing turns out to be wrong."""
+    from dashboard import ledger
+    from dashboard import storage as st
+    conn = st.connect()
+    acct = ledger.create_account(conn, "Checking")
+    g = ledger.create_category_group(conn, "Everyday")
+    cat = ledger.create_category(conn, g, "Groceries")
+    ledger.add_transaction(conn, acct, "2026-08-01", -1200, "Tesco", cat)
+    ledger.add_transaction(conn, acct, "2026-08-02", -800, "Unfiled thing")
+    conn.close()
+
+    cookie, _ = login(live)
+    _, _, d = call(live, "GET", "/api/view/ledger?month=2026-08",
+                   headers={"Cookie": cookie})
+    tree = d["tree"]
+    assert [a["name"] for a in tree] == ["Checking"]
+    names = {g["name"] for g in tree[0]["groups"]}
+    assert "Everyday" in names
+    # Uncategorised rows still appear: hiding them would make the screen
+    # disagree with the ledger about what exists.
+    assert "No category" in names
+
+
+def test_a_row_can_be_refiled_and_moves_in_the_tree(live):
+    from dashboard import ledger
+    from dashboard import storage as st
+    conn = st.connect()
+    acct = ledger.create_account(conn, "Checking")
+    g = ledger.create_category_group(conn, "Everyday")
+    a = ledger.create_category(conn, g, "Groceries")
+    b = ledger.create_category(conn, g, "Fuel")
+    txn = ledger.add_transaction(conn, acct, "2026-08-01", -1200, "Shell", a)
+    conn.close()
+
+    cookie, csrf = login(live)
+    call(live, "PATCH", f"/api/edit/transaction/{txn}", {"category_id": b},
+         headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+
+    _, _, d = call(live, "GET", "/api/view/ledger?month=2026-08",
+                   headers={"Cookie": cookie})
+    cats = {c["name"]: c["rows"] for g_ in d["tree"][0]["groups"]
+            for c in g_["categories"]}
+    assert len(cats.get("Fuel", [])) == 1
+    assert not cats.get("Groceries")
+
+
+def test_a_single_transaction_can_be_deleted(live):
+    from dashboard import ledger
+    from dashboard import storage as st
+    conn = st.connect()
+    acct = ledger.create_account(conn, "Checking")
+    txn = ledger.add_transaction(conn, acct, "2026-08-01", -1200, "Wrong row")
+    conn.close()
+    cookie, csrf = login(live)
+    status, _, r = call(live, "DELETE", f"/api/edit/transaction/{txn}",
+                        headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+    assert status == 200 and r["removed"] == 1
+    conn = st.connect()
+    assert ledger.account_balance(conn, acct) == 0
+    conn.close()
+
+
+def test_deleting_something_that_is_not_there(live):
+    cookie, csrf = login(live)
+    status, _, _ = call(live, "DELETE", "/api/edit/transaction/" + "0" * 32,
+                        headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+    assert status == 404

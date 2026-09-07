@@ -1402,3 +1402,38 @@ textarea.input { resize: vertical; min-height: 5.5rem; line-height: 1.45; }
 }
 .imphist-row:first-child { border-top: 0; }
 .imphist-name { overflow-wrap: anywhere; }
+
+/* Where things are filed: account, then group, then category, then the rows.
+ * The indentation is the argument -- it shows what belongs to what before a
+ * word is read. */
+.lacct { margin-top: var(--s5); }
+.lacct:first-child { margin-top: 0; }
+.lacct-name {
+  font-size: var(--t-lg); font-weight: 600;
+  padding-bottom: var(--s2); border-bottom: 2px solid var(--line-lit);
+}
+.lgroup { margin-top: var(--s4); padding-left: var(--s3); }
+.lgroup-name {
+  font-size: var(--t-label); text-transform: uppercase;
+  letter-spacing: var(--track); color: var(--text-3);
+}
+.lcat { margin-top: var(--s3); padding-left: var(--s3); }
+.lcat-name { font-weight: 550; padding-bottom: 0.15rem; }
+.lrow {
+  display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap;
+  padding: 0.3rem 0 0.3rem var(--s3);
+  border-top: 1px solid var(--line);
+}
+.lrow-date { color: var(--text-3); font-variant-numeric: tabular-nums; flex: none; }
+.lrow-payee { min-width: 8rem; overflow-wrap: anywhere; }
+.lrow-amt { font-variant-numeric: tabular-nums; flex: none; }
+.lrow .input { flex: 0 1 11rem; min-width: 8rem; font-size: 0.86rem; }
+.iconbtn.danger { color: var(--danger); }
+.warn-note {
+  padding: var(--s2) var(--s3); border-radius: var(--r-sm);
+  background: var(--warn-tint); border-left: 2px solid var(--warn);
+}
+@media (max-width: 720px) {
+  .lrow .input { flex: 1 1 100%; }
+  .lgroup, .lcat { padding-left: var(--s2); }
+}

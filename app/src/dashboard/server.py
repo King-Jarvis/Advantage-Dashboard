@@ -110,10 +110,11 @@ ROUTES = [
     ("coverage", {"GET"},         re.compile(r"^/api/view/coverage$"),     "session"),
     ("txns",     {"GET"},         re.compile(r"^/api/view/transactions$"),  "session"),
     ("unfiled",  {"GET"},         re.compile(r"^/api/view/unfiled$"),       "session"),
-    ("fileone",  {"PATCH"},
+    ("fileone",  {"PATCH", "DELETE"},
      re.compile(r"^/api/edit/transaction/([0-9a-f]{32})$"),                 "session"),
     ("filemany", {"POST"},        re.compile(r"^/api/edit/by-payee$"),      "session"),
     ("xfers",    {"GET"},         re.compile(r"^/api/view/transfers$"),     "session"),
+    ("ledger",   {"GET"},         re.compile(r"^/api/view/ledger$"),        "session"),
     ("xferlink", {"POST", "DELETE"},
      re.compile(r"^/api/edit/transfer$"),                                  "session"),
     ("split",    {"GET", "POST", "DELETE"},
@@ -514,9 +515,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def api_fileone(self, conn, session, txn_id):
         from . import ledger
+        if self.command == "DELETE":
+            # Soft-delete, and it takes whole units: half a transfer or a
+            # split parent without its children is never left behind.
+            n = ledger.delete_transaction(conn, txn_id)
+            if not n:
+                return self.fail(404, "no such transaction")
+            return self.json_out({"removed": n})
         data = self.body_json()
         fields = {k: v for k, v in data.items()
-                  if k in ("category_id", "payee", "notes", "date")}
+                  if k in ("category_id", "payee", "notes", "date",
+                           "account_id")}
         if not fields:
             raise ValueError("nothing to change")
         try:
@@ -556,6 +565,21 @@ class Handler(BaseHTTPRequestHandler):
         except KeyError:
             return self.fail(404, "no such transaction or category")
         self.json_out({"id": txn_id, "parts": ledger.split_parts(conn, txn_id)})
+
+    def api_ledger(self, conn, session):
+        """Everything, arranged account then group then category."""
+        from . import ledger
+        q = self.query()
+        month = (q.get("month") or [""])[0] or None
+        if month and not re.fullmatch(r"\d{4}-\d{2}", month):
+            raise ValueError("month must be YYYY-MM")
+        self.json_out({
+            "month": month,
+            "accounts": [dict(r) for r in conn.execute(
+                "SELECT id, name, on_budget FROM accounts WHERE closed=0"
+                " ORDER BY name")],
+            "categories": [dict(r) for r in ledger.list_categories(conn)],
+            "tree": ledger.ledger_tree(conn, month)})
 
     def api_xfers(self, conn, session):
         """Linked movements, and pairs that look like one."""

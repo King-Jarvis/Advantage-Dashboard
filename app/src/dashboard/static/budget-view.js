@@ -10,12 +10,14 @@
  * else is on screen competing with it.
  */
 import { del, get, patch, post } from "./api.js";
+import { ledgerView } from "./ledger-view.js";
 import { el, money, moneyEl, mount, parseMoney, svg } from "./dom.js";
 import { spendingChart } from "./chart.js";
 
 const state = {
   month: null, data: null, suggestions: null, groups: null,
   expanded: null, moveFrom: null, adding: false, error: "", splitting: null,
+  organising: false,
 };
 
 const KIND_WORDS = {
@@ -78,6 +80,8 @@ function header(onMonth, refresh) {
       el("button", { class: "btn ghost", type: "button", text: "›",
                      "aria-label": "Next month", onclick: () => shift(1) }),
       el("div", { class: "spacer" }),
+      el("button", { class: "btn", type: "button", text: "Where things are filed",
+                     onclick: () => { state.organising = true; refresh(true); } }),
       el("button", { class: "btn", type: "button", text: "New category",
                      onclick: () => { state.adding = !state.adding; refresh(true); } })),
     el("div", { class: "node-body" },
@@ -477,6 +481,20 @@ function key(cls, label) {
 /* ── the view ───────────────────────────────────────────────────────────── */
 export async function budgetView(container, month, onMonth) {
   state.month = month;
+  // A screen of its own rather than a panel inside this one: it is a
+  // different question -- where is everything filed, rather than how much is
+  // in each envelope -- and answering both at once makes neither legible.
+  if (state.organising) {
+    return ledgerView(container, {
+      month,
+      onBack: () => {
+        state.organising = false;
+        // Reloaded, not restored: things have moved, so the envelopes and
+        // their totals are not what they were when this screen was left.
+        return budgetView(container, month, onMonth);
+      },
+    });
+  }
   const [data, groups] = await Promise.all([
     get(`/api/view/budget?month=${encodeURIComponent(month)}`),
     get("/api/category-groups"),

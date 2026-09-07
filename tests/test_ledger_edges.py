@@ -78,9 +78,53 @@ def test_recategorising_moves_the_activity(conn, book):
 def test_unknown_fields_are_refused(conn, book):
     t = ledger.add_transaction(conn, book["checking"], "2026-01-09", -30_00)
     with pytest.raises(ValueError):
-        ledger.update_transaction(conn, t, account_id=book["savings"])
-    with pytest.raises(ValueError):
         ledger.update_transaction(conn, t, deleted=1)
+
+
+def test_an_ordinary_row_can_move_account(conn, book):
+    """A statement filed against the wrong account is the reason this is
+    editable. It used to be refused outright."""
+    t = ledger.add_transaction(conn, book["checking"], "2026-01-09", -30_00)
+    ledger.update_transaction(conn, t, account_id=book["savings"])
+    assert ledger.account_balance(conn, book["checking"]) == 0
+    assert ledger.account_balance(conn, book["savings"]) == -30_00
+
+
+def test_moving_an_unknown_account_is_refused(conn, book):
+    t = ledger.add_transaction(conn, book["checking"], "2026-01-09", -30_00)
+    with pytest.raises(KeyError):
+        ledger.update_transaction(conn, t, account_id="0" * 32)
+
+
+def test_half_a_transfer_cannot_move_alone(conn, book):
+    """Both halves would end up in one account, and the movement would stop
+    being a movement."""
+    ledger.add_transfer(conn, book["checking"], book["savings"],
+                        "2026-01-09", 100_00)
+    half = conn.execute("SELECT id FROM transactions"
+                        " WHERE transfer_id IS NOT NULL LIMIT 1").fetchone()[0]
+    with pytest.raises(ValueError, match="unlink"):
+        ledger.update_transaction(conn, half, account_id=book["savings"])
+
+
+def test_a_split_part_cannot_change_account_on_its_own(conn, book):
+    t = ledger.add_transaction(conn, book["checking"], "2026-01-09", -50_00)
+    ledger.split_transaction(conn, t, [(book["groceries"], -30_00),
+                                       (book["fuel"], -20_00)])
+    part = ledger.split_parts(conn, t)[0]["id"]
+    with pytest.raises(ValueError, match="whole split"):
+        ledger.update_transaction(conn, part, account_id=book["savings"])
+
+
+def test_moving_a_split_to_another_account_takes_its_parts(conn, book):
+    """A split spanning two accounts stops adding up in both."""
+    t = ledger.add_transaction(conn, book["checking"], "2026-01-09", -50_00)
+    ledger.split_transaction(conn, t, [(book["groceries"], -30_00),
+                                       (book["fuel"], -20_00)])
+    ledger.update_transaction(conn, t, account_id=book["savings"])
+    accounts = {r[0] for r in conn.execute(
+        "SELECT account_id FROM transactions WHERE deleted=0")}
+    assert accounts == {book["savings"]}
 
 
 def test_editing_a_missing_transaction_raises(conn, book):
