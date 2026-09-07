@@ -1348,3 +1348,19 @@ textarea.input { resize: vertical; min-height: 5.5rem; line-height: 1.45; }
 }
 .showfiled { font-size: 0.84rem; color: var(--text-2); white-space: nowrap; }
 .unfiled .chips { margin-bottom: var(--s2); align-items: center; }
+
+/* Dividing one payment across categories. The remainder is shown as you type,
+ * because "make these add to -50.00" is arithmetic the screen should do. */
+.splitbox {
+  margin: 0.35rem 0 0.6rem; padding: 0.6rem 0.7rem;
+  background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+}
+.splitparts { display: grid; gap: 0.4rem; margin-bottom: 0.5rem; }
+.splitpart { display: flex; gap: 0.4rem; align-items: center; }
+.splitpart .input { flex: 1 1 8rem; min-width: 7rem; }
+.splitpart .amount { flex: 0 0 7.5rem; text-align: right; }
+.splitrem { font-size: 0.82rem; font-variant-numeric: tabular-nums; }
+.splitrem.ok { color: var(--ok); }
+.splitrem.warn { color: var(--warn); }
+.splitbox .error:empty { display: none; }

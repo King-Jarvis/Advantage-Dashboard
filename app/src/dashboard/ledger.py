@@ -232,6 +232,85 @@ def add_split(conn, account_id, date, splits, payee="", notes="",
     return parent
 
 
+def split_transaction(conn, txn_id, parts):
+    """Divide an existing transaction across categories.
+
+    `parts` is [(category_id, amount_cents), ...]. The row keeps its id and
+    becomes the parent: that matters because the id carries the bank's own
+    FITID, and losing it would make the same statement re-import as new
+    spending the next time it is uploaded.
+
+    The parts must sum to the original amount. A split is a statement about
+    what one payment was for, not an opportunity to change how much it was --
+    and a balance that quietly moves because someone was itemising a receipt
+    is the kind of error nobody finds until it is months old.
+    """
+    row = conn.execute("SELECT * FROM transactions WHERE id=? AND deleted=0",
+                       (txn_id,)).fetchone()
+    if row is None:
+        raise KeyError(txn_id)
+    if row["transfer_id"]:
+        raise ValueError("a transfer moves money between your own accounts, "
+                         "so there is nothing to divide across categories")
+    if row["parent_id"]:
+        raise ValueError("this is already part of a split")
+    if not parts:
+        raise ValueError("a split needs at least one part")
+    if not all(isinstance(a, int) for _, a in parts):
+        raise TypeError("split amounts must be int cents")
+    total = sum(a for _, a in parts)
+    if total != row["amount_cents"]:
+        raise ValueError(
+            "the parts add up to %s but the transaction is %s"
+            % (total / 100, row["amount_cents"] / 100))
+    for cid, _ in parts:
+        if conn.execute("SELECT 1 FROM categories WHERE id=?",
+                        (cid,)).fetchone() is None:
+            raise KeyError(cid)
+
+    # Re-splitting replaces the previous division rather than adding to it.
+    conn.execute("DELETE FROM transactions WHERE parent_id=?", (txn_id,))
+    now = _now()
+    # The parent carries no category: the children hold the meaning, and the
+    # balance counts the parent only.
+    conn.execute("UPDATE transactions SET category_id=NULL, updated_at=?"
+                 " WHERE id=?", (now, txn_id))
+    for cid, amt in parts:
+        conn.execute(
+            "INSERT INTO transactions (id, account_id, date, amount_cents,"
+            " payee, payee_norm, notes, category_id, cleared, parent_id,"
+            " source, created_at, updated_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (new_id(), row["account_id"], row["date"], amt, row["payee"],
+             _norm_payee(row["payee"]), "", cid, row["cleared"], txn_id,
+             row["source"], now, now))
+    _audit(conn, "update", "split", txn_id, "%d parts" % len(parts))
+    conn.commit()
+    return txn_id
+
+
+def unsplit_transaction(conn, txn_id):
+    """Put a split back together, leaving the parent uncategorised."""
+    row = conn.execute("SELECT id FROM transactions WHERE id=? AND deleted=0",
+                       (txn_id,)).fetchone()
+    if row is None:
+        raise KeyError(txn_id)
+    n = conn.execute("DELETE FROM transactions WHERE parent_id=?",
+                     (txn_id,)).rowcount
+    if n:
+        _audit(conn, "update", "split", txn_id, "unsplit")
+    conn.commit()
+    return n
+
+
+def split_parts(conn, txn_id):
+    """The children of a split, if it has any."""
+    return [dict(r) for r in conn.execute(
+        "SELECT t.id, t.amount_cents, t.category_id, c.name category"
+        " FROM transactions t LEFT JOIN categories c ON c.id = t.category_id"
+        " WHERE t.parent_id=? AND t.deleted=0 ORDER BY t.rowid", (txn_id,))]
+
+
 def delete_transaction(conn, txn_id):
     """Soft-delete, taking the whole unit with it.
 

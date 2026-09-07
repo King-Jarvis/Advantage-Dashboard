@@ -15,7 +15,7 @@ import { spendingChart } from "./chart.js";
 
 const state = {
   month: null, data: null, suggestions: null, groups: null,
-  expanded: null, moveFrom: null, adding: false, error: "",
+  expanded: null, moveFrom: null, adding: false, error: "", splitting: null,
 };
 
 const KIND_WORDS = {
@@ -380,11 +380,21 @@ function detail(cat, suggestion, refresh) {
       } });
 
     const rows = t.transactions.length
-      ? t.transactions.map((x) => el("div", { class: "txn" },
-          el("span", { class: "txn-date", text: x.date.slice(5) }),
-          el("span", { class: "txn-payee grow", text: x.payee || "—" }),
-          el("span", { class: "txn-acct hint", text: x.account }),
-          moneyEl(x.amount_cents, "txn-amt")))
+      ? t.transactions.map((x) => el("div", {},
+          el("div", { class: "txn" },
+            el("span", { class: "txn-date", text: x.date.slice(5) }),
+            el("span", { class: "txn-payee grow", text: x.payee || "—" }),
+            el("span", { class: "txn-acct hint", text: x.account }),
+            moneyEl(x.amount_cents, "txn-amt"),
+            (x.parent_id || x.transfer_id) ? null : el("button", {
+              "aria-label": "Divide this across categories",
+              class: "iconbtn", type: "button",
+              text: state.splitting === x.id ? "×" : "÷",
+              onclick: () => {
+                state.splitting = state.splitting === x.id ? null : x.id;
+                refresh();
+              } })),
+          state.splitting === x.id ? splitEditor(x, refresh) : null))
       : [el("div", { class: "hint", text: "Nothing in this category this month." })];
 
     mount(box,

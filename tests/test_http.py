@@ -1834,3 +1834,74 @@ def test_incoming_and_outgoing_are_distinguishable(live):
     by = {g["key"]: g["total_cents"] for g in got["groups"]}
     assert by["payroll deposit"] > 0
     assert by["tesco metro"] < 0
+
+
+# ── splitting one payment ─────────────────────────────────────────────────
+def _split_fixture():
+    from dashboard import ledger
+    from dashboard import storage as st
+    conn = st.connect()
+    g = ledger.create_category_group(conn, "Everyday")
+    fuel = ledger.create_category(conn, g, "Gas")
+    snacks = ledger.create_category(conn, g, "Snacks")
+    acct = ledger.create_account(conn, "Checking")
+    txn = ledger.add_transaction(conn, acct, "2026-08-01", -5000,
+                                 "BUC-EES 4471", fuel)
+    conn.close()
+    return txn, fuel, snacks
+
+
+def test_a_payment_splits_over_http(live):
+    """Fuel and a sandwich from the same pump: one payment, two things."""
+    txn, fuel, snacks = _split_fixture()
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    status, _, body = call(live, "POST", f"/api/edit/transaction/{txn}/split",
+                           {"parts": [
+                               {"category_id": fuel, "amount_cents": -4200},
+                               {"category_id": snacks, "amount_cents": -800}]},
+                           headers=h)
+    assert status == 200
+    assert sorted(p["amount_cents"] for p in body["parts"]) == [-4200, -800]
+
+
+def test_parts_that_do_not_add_up_are_refused_over_http(live):
+    txn, fuel, snacks = _split_fixture()
+    cookie, csrf = login(live)
+    status, _, body = call(live, "POST", f"/api/edit/transaction/{txn}/split",
+                           {"parts": [
+                               {"category_id": fuel, "amount_cents": -4200},
+                               {"category_id": snacks, "amount_cents": -900}]},
+                           headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+    assert status == 400 and "add up" in str(body)
+
+
+def test_a_split_can_be_undone(live):
+    txn, fuel, snacks = _split_fixture()
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    call(live, "POST", f"/api/edit/transaction/{txn}/split",
+         {"parts": [{"category_id": fuel, "amount_cents": -4200},
+                    {"category_id": snacks, "amount_cents": -800}]}, headers=h)
+    _, _, r = call(live, "DELETE", f"/api/edit/transaction/{txn}/split",
+                   headers=h)
+    assert r["removed"] == 2
+    _, _, after = call(live, "GET", f"/api/edit/transaction/{txn}/split",
+                       headers={"Cookie": cookie})
+    assert after["parts"] == []
+
+
+def test_the_transaction_list_says_which_rows_can_be_split(live):
+    """A split child cannot be divided again, so the control must not be
+    offered on one -- a button whose only outcome is an error."""
+    txn, fuel, snacks = _split_fixture()
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    call(live, "POST", f"/api/edit/transaction/{txn}/split",
+         {"parts": [{"category_id": fuel, "amount_cents": -4200},
+                    {"category_id": snacks, "amount_cents": -800}]}, headers=h)
+    _, _, got = call(live, "GET", f"/api/view/transactions?category={fuel}",
+                     headers={"Cookie": cookie})
+    row = got["transactions"][0]
+    assert row["parent_id"] == txn, "the list shows children, which cannot split"
+    assert "category_id" in row

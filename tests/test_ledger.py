@@ -248,3 +248,107 @@ def test_realistic_month_stays_consistent(conn, book):
     assert ledger.category_balance(conn, book["rent"], "2026-01") == 0
     assert ledger.to_be_budgeted(conn, "2026-01") == 3000_00 - 1750_00
     assert ledger.check_invariants(conn) == []
+
+
+# ── splitting one payment across categories ───────────────────────────────
+def test_a_payment_can_be_split_across_categories(conn, book):
+    """Fuel and a sandwich bought together are one payment and two things."""
+    txn = ledger.add_transaction(conn, book["checking"], "2026-08-01", -5000,
+                                 "SHELL 4471", book["fuel"])
+    ledger.split_transaction(conn, txn, [
+        (book["fuel"], -4200), (book["groceries"], -800)])
+    parts = ledger.split_parts(conn, txn)
+    assert [p["amount_cents"] for p in parts] == [-4200, -800]
+    assert sum(p["amount_cents"] for p in parts) == -5000
+
+
+def test_the_parent_keeps_its_id(conn, book):
+    """The id carries the bank's FITID. Losing it would make the same
+    statement re-import as new spending."""
+    txn = ledger.add_transaction(conn, book["checking"], "2026-08-01", -5000,
+                                 "SHELL 4471", book["fuel"])
+    same = ledger.split_transaction(conn, txn, [
+        (book["fuel"], -4200), (book["groceries"], -800)])
+    assert same == txn
+    assert conn.execute("SELECT 1 FROM transactions WHERE id=?",
+                        (txn,)).fetchone() is not None
+
+
+def test_the_parent_loses_its_category(conn, book):
+    """The children hold the meaning now; a categorised parent would count
+    the money twice."""
+    txn = ledger.add_transaction(conn, book["checking"], "2026-08-01", -5000,
+                                 "SHELL 4471", book["fuel"])
+    ledger.split_transaction(conn, txn, [
+        (book["fuel"], -4200), (book["groceries"], -800)])
+    assert conn.execute("SELECT category_id FROM transactions WHERE id=?",
+                        (txn,)).fetchone()[0] is None
+
+
+def test_the_balance_does_not_move(conn, book):
+    before = ledger.account_balance(conn, book["checking"])
+    txn = ledger.add_transaction(conn, book["checking"], "2026-08-01", -5000,
+                                 "SHELL 4471", book["fuel"])
+    ledger.split_transaction(conn, txn, [
+        (book["fuel"], -4200), (book["groceries"], -800)])
+    assert ledger.account_balance(conn, book["checking"]) == before - 5000
+
+
+def test_parts_that_do_not_add_up_are_refused(conn, book):
+    """A split says what a payment was for, not how much it was. A balance
+    that moves while someone itemises a receipt is found months later."""
+    txn = ledger.add_transaction(conn, book["checking"], "2026-08-01", -5000,
+                                 "SHELL 4471", book["fuel"])
+    with pytest.raises(ValueError, match="add up"):
+        ledger.split_transaction(conn, txn, [
+            (book["fuel"], -4200), (book["groceries"], -900)])
+
+
+def test_re_splitting_replaces_rather_than_accumulates(conn, book):
+    txn = ledger.add_transaction(conn, book["checking"], "2026-08-01", -5000,
+                                 "SHELL 4471", book["fuel"])
+    ledger.split_transaction(conn, txn, [
+        (book["fuel"], -4200), (book["groceries"], -800)])
+    ledger.split_transaction(conn, txn, [
+        (book["fuel"], -3000), (book["groceries"], -2000)])
+    parts = ledger.split_parts(conn, txn)
+    assert len(parts) == 2
+    assert sum(p["amount_cents"] for p in parts) == -5000
+
+
+def test_a_transfer_cannot_be_split(conn, book):
+    """It moves money between your own accounts, so there is nothing to
+    divide across categories."""
+    ledger.add_transfer(conn, book["checking"], book["savings"],
+                        "2026-08-01", 10000)
+    txn = conn.execute("SELECT id FROM transactions WHERE transfer_id IS NOT NULL"
+                       " LIMIT 1").fetchone()[0]
+    with pytest.raises(ValueError, match="transfer"):
+        ledger.split_transaction(conn, txn, [(book["fuel"], 10000)])
+
+
+def test_a_split_child_cannot_itself_be_split(conn, book):
+    txn = ledger.add_transaction(conn, book["checking"], "2026-08-01", -5000,
+                                 "SHELL 4471", book["fuel"])
+    ledger.split_transaction(conn, txn, [
+        (book["fuel"], -4200), (book["groceries"], -800)])
+    child = ledger.split_parts(conn, txn)[0]["id"]
+    with pytest.raises(ValueError, match="already part of a split"):
+        ledger.split_transaction(conn, child, [(book["fuel"], -4200)])
+
+
+def test_unsplitting_puts_it_back(conn, book):
+    txn = ledger.add_transaction(conn, book["checking"], "2026-08-01", -5000,
+                                 "SHELL 4471", book["fuel"])
+    ledger.split_transaction(conn, txn, [
+        (book["fuel"], -4200), (book["groceries"], -800)])
+    assert ledger.unsplit_transaction(conn, txn) == 2
+    assert ledger.split_parts(conn, txn) == []
+    assert ledger.account_balance(conn, book["checking"]) == -5000
+
+
+def test_an_unknown_category_is_refused(conn, book):
+    txn = ledger.add_transaction(conn, book["checking"], "2026-08-01", -5000,
+                                 "SHELL 4471", book["fuel"])
+    with pytest.raises(KeyError):
+        ledger.split_transaction(conn, txn, [("0" * 32, -5000)])

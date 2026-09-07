@@ -113,6 +113,8 @@ ROUTES = [
     ("fileone",  {"PATCH"},
      re.compile(r"^/api/edit/transaction/([0-9a-f]{32})$"),                 "session"),
     ("filemany", {"POST"},        re.compile(r"^/api/edit/by-payee$"),      "session"),
+    ("split",    {"GET", "POST", "DELETE"},
+     re.compile(r"^/api/edit/transaction/([0-9a-f]{32})/split$"),           "session"),
     ("upload",   {"POST"},        re.compile(r"^/api/import/upload$"),     "session"),
     ("batches",  {"GET"},         re.compile(r"^/api/import/batches$"),    "session"),
     ("batch",    {"GET", "POST", "DELETE"},
@@ -501,6 +503,38 @@ class Handler(BaseHTTPRequestHandler):
         except KeyError:
             return self.fail(404, "no such transaction")
         self.json_out({"id": txn_id, "updated": sorted(fields)})
+
+    def api_split(self, conn, session, txn_id):
+        """Divide one payment across categories, or put it back together."""
+        from . import ledger
+        if self.command == "GET":
+            return self.json_out({"parts": ledger.split_parts(conn, txn_id)})
+        if self.command == "DELETE":
+            try:
+                n = ledger.unsplit_transaction(conn, txn_id)
+            except KeyError:
+                return self.fail(404, "no such transaction")
+            return self.json_out({"removed": n})
+
+        data = self.body_json()
+        raw = data.get("parts")
+        if not isinstance(raw, list) or not raw:
+            raise ValueError("parts must be a non-empty list")
+        parts = []
+        for item in raw:
+            if not isinstance(item, dict):
+                raise ValueError("each part is an object")
+            cid = str(item.get("category_id", ""))
+            try:
+                amount = int(item["amount_cents"])
+            except (KeyError, TypeError, ValueError):
+                raise ValueError("each part needs whole-cent amount_cents") from None
+            parts.append((cid, amount))
+        try:
+            ledger.split_transaction(conn, txn_id, parts)
+        except KeyError:
+            return self.fail(404, "no such transaction or category")
+        self.json_out({"id": txn_id, "parts": ledger.split_parts(conn, txn_id)})
 
     def api_filemany(self, conn, session):
         """File every unfiled row for one merchant.
@@ -1175,8 +1209,12 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("limit must be a number") from None
 
         rows = conn.execute(
+            # category_id and parent_id come too: the split editor needs the
+            # first to preselect, and the second to know this row is already
+            # part of a split and cannot be divided again.
             "SELECT t.id, t.date, t.amount_cents, t.payee, t.notes, t.cleared,"
-            "       t.source, a.name account, c.name category"
+            "       t.source, t.category_id, t.parent_id, t.transfer_id,"
+            "       a.name account, c.name category"
             " FROM transactions t JOIN accounts a ON a.id = t.account_id"
             " LEFT JOIN categories c ON c.id = t.category_id"
             " WHERE " + " AND ".join(where) +
