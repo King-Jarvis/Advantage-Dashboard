@@ -1905,3 +1905,85 @@ def test_the_transaction_list_says_which_rows_can_be_split(live):
     row = got["transactions"][0]
     assert row["parent_id"] == txn, "the list shows children, which cannot split"
     assert "category_id" in row
+
+
+# ── income categories ─────────────────────────────────────────────────────
+def test_a_category_can_be_created_as_income(live):
+    """Without this there was no way to make one from the interface at all,
+    so a wage filed as spending left the budget believing nothing arrived."""
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    _, _, grp = call(live, "POST", "/api/category-groups",
+                     {"name": "Money"}, headers=h)
+    _, _, cat = call(live, "POST", "/api/categories",
+                     {"name": "Paycheck", "group_id": grp["id"],
+                      "is_income": True}, headers=h)
+    from dashboard import storage as st
+    conn = st.connect()
+    got = conn.execute("SELECT is_income FROM categories WHERE id=?",
+                       (cat["id"],)).fetchone()[0]
+    conn.close()
+    assert got == 1
+
+
+def test_a_category_in_an_income_group_is_income_by_default(live):
+    """Putting Salary under Income and having it count as spending is not a
+    distinction anyone means to draw."""
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    _, _, grp = call(live, "POST", "/api/category-groups",
+                     {"name": "Income", "is_income": True}, headers=h)
+    _, _, cat = call(live, "POST", "/api/categories",
+                     {"name": "Salary", "group_id": grp["id"]}, headers=h)
+    from dashboard import storage as st
+    conn = st.connect()
+    got = conn.execute("SELECT is_income FROM categories WHERE id=?",
+                       (cat["id"],)).fetchone()[0]
+    conn.close()
+    assert got == 1
+
+
+def test_an_existing_category_can_be_switched_to_income(live):
+    """The repair path: a wage already filed as spending has to be fixable
+    without rebuilding the category and re-filing every row."""
+    from dashboard import ledger
+    from dashboard import storage as st
+    conn = st.connect()
+    gid = ledger.create_category_group(conn, "Money")
+    cid = ledger.create_category(conn, gid, "Paycheck")
+    acct = ledger.create_account(conn, "Checking")
+    ledger.add_transaction(conn, acct, "2026-08-01", 250000, "PAYROLL", cid)
+    conn.close()
+
+    conn = st.connect()
+    assert ledger.to_be_budgeted(conn, "2026-08") == 0, "counted before the fix"
+    conn.close()
+
+    cookie, csrf = login(live)
+    call(live, "PATCH", f"/api/categories/{cid}", {"is_income": True},
+         headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+
+    conn = st.connect()
+    assert ledger.to_be_budgeted(conn, "2026-08") == 250000
+    conn.close()
+
+
+def test_switching_does_not_disturb_the_transactions(live):
+    from dashboard import ledger
+    from dashboard import storage as st
+    conn = st.connect()
+    gid = ledger.create_category_group(conn, "Money")
+    cid = ledger.create_category(conn, gid, "Paycheck")
+    acct = ledger.create_account(conn, "Checking")
+    for i in range(3):
+        ledger.add_transaction(conn, acct, "2026-08-0%d" % (i + 1), 100000,
+                               "PAYROLL", cid)
+    conn.close()
+    cookie, csrf = login(live)
+    call(live, "PATCH", f"/api/categories/{cid}", {"is_income": True},
+         headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+    conn = st.connect()
+    n = conn.execute("SELECT COUNT(*) FROM transactions WHERE category_id=?",
+                     (cid,)).fetchone()[0]
+    conn.close()
+    assert n == 3

@@ -89,7 +89,11 @@ def update_category(conn, category_id, **fields):
     silently rewriting the past; hiding keeps the ledger honest and takes it
     off the screen, which is what was actually wanted.
     """
-    allowed = {"name", "group_id", "sort", "hidden", "carryover_negative"}
+    # is_income belongs here: a category filed as spending when it is really
+    # income makes the budget believe nothing came in, and there has to be a
+    # way to correct that without rebuilding the category.
+    allowed = {"name", "group_id", "sort", "hidden", "carryover_negative",
+               "is_income"}
     bad = set(fields) - allowed
     if bad:
         raise ValueError("cannot update: %s" % ", ".join(sorted(bad)))

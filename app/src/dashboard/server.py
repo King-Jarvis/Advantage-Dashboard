@@ -1326,8 +1326,15 @@ class Handler(BaseHTTPRequestHandler):
                         (group_id,)).fetchone() is None:
             raise ValueError("no such group")
         try:
+            # A category in an income group is income unless told otherwise:
+            # putting "Salary" under Income and having it count as spending
+            # is not a distinction anyone means to draw.
+            grp_income = bool(conn.execute(
+                "SELECT is_income FROM category_groups WHERE id=?",
+                (group_id,)).fetchone()["is_income"])
             cid = ledger.create_category(
                 conn, group_id, name,
+                is_income=bool(data.get("is_income", grp_income)),
                 carryover_negative=bool(data.get("carryover_negative")),
                 sort=int(data.get("sort", 0)))
         except sqlite3.IntegrityError:
@@ -1351,7 +1358,7 @@ class Handler(BaseHTTPRequestHandler):
         data = self.body_json()
         fields = {k: v for k, v in data.items()
                   if k in ("name", "group_id", "sort", "hidden",
-                           "carryover_negative")}
+                           "carryover_negative", "is_income")}
         if not fields:
             raise ValueError("nothing to change")
         try:

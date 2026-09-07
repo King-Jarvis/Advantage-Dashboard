@@ -117,13 +117,19 @@ function addCategoryForm(refresh) {
                              placeholder: "Category name", "aria-label": "Name" });
   const group = el("select", { class: "input", "aria-label": "Group" });
   for (const g of state.groups || []) {
-    if (g.is_income) continue;
     group.append(el("option", { value: g.id, text: g.name }));
   }
   const newGroup = el("input", { class: "input", type: "text",
                                  placeholder: "or a new group",
                                  "aria-label": "New group name" });
-  const carry = el("input", { type: "checkbox", id: "carryneg" });
+  const carry = el("input", { type: "checkbox", class: "check", id: "carryneg" });
+  const income = el("input", { type: "checkbox", class: "check", id: "isincome" });
+  // Follows the group by default: putting "Salary" under Income and having it
+  // count as spending is not a distinction anyone means to draw.
+  group.addEventListener("change", () => {
+    const g = (state.groups || []).find((x) => x.id === group.value);
+    income.checked = Boolean(g && g.is_income);
+  });
 
   async function submit() {
     state.error = "";
@@ -133,7 +139,8 @@ function addCategoryForm(refresh) {
       let groupId = group.value;
       const fresh = newGroup.value.trim();
       if (fresh) {
-        const g = await post("/api/category-groups", { name: fresh });
+        const g = await post("/api/category-groups",
+                             { name: fresh, is_income: income.checked });
         groupId = g.id;
       }
       if (!groupId) {
@@ -141,7 +148,8 @@ function addCategoryForm(refresh) {
         return refresh(true);
       }
       await post("/api/categories", {
-        name: label, group_id: groupId, carryover_negative: carry.checked });
+        name: label, group_id: groupId, carryover_negative: carry.checked,
+        is_income: income.checked });
       state.adding = false;
       // No further step: the classifier reads the category table directly, so
       // the next import can suggest this category immediately.
@@ -172,7 +180,15 @@ function addCategoryForm(refresh) {
         el("span", { class: "hint",
           text: "On: an overspend follows the category, so it has to be "
               + "made up here. Off: it comes out of next month's total. "
-              + "Rent on, Groceries usually off." }))),
+              + "Rent on, Groceries usually off." })),
+      el("div", { class: "field" },
+        el("span", { class: "label", text: "Direction" }),
+        el("label", { class: "check" }, income,
+          el("span", { text: "This is money coming in" })),
+        el("span", { class: "hint",
+          text: "Only money in an income category counts towards what there "
+              + "is to budget. A wage filed as spending leaves the budget "
+              + "believing nothing arrived." }))),
     el("div", { class: "row wrap addbtns" },
       el("button", { class: "btn primary", type: "button", text: "Add category",
                      onclick: submit }),
@@ -293,13 +309,14 @@ function categoryEditor(cat, refresh) {
                              "aria-label": "Category name" });
   const group = el("select", { class: "input", "aria-label": "Group" });
   for (const g of state.groups || []) {
-    if (g.is_income) continue;
     const opt = el("option", { value: g.id, text: g.name });
     if (g.id === cat.group_id) opt.selected = true;
     group.append(opt);
   }
   const carry = el("input", { type: "checkbox", class: "check" });
   carry.checked = Boolean(cat.carryover_negative);
+  const income = el("input", { type: "checkbox", class: "check" });
+  income.checked = Boolean(cat.is_income);
   const err = el("div", { class: "error" });
 
   async function save() {
@@ -311,6 +328,7 @@ function categoryEditor(cat, refresh) {
       await patch(`/api/categories/${cat.id}`, {
         name: label, group_id: group.value,
         carryover_negative: carry.checked,
+        is_income: income.checked,
       });
       refresh();
     } catch (e) {
@@ -345,7 +363,14 @@ function categoryEditor(cat, refresh) {
       el("div", { class: "field" },
         el("span", { class: "label", text: "Overspending" }),
         el("label", { class: "check" }, carry,
-          el("span", { text: "Carry it into next month" })))),
+          el("span", { text: "Carry it into next month" }))),
+        el("div", { class: "field" },
+          el("span", { class: "label", text: "Direction" }),
+          el("label", { class: "check" }, income,
+            el("span", { text: "This is money coming in" })),
+          el("span", { class: "hint",
+            text: "Only money in an income category counts towards what "
+                + "there is to budget." }))),
     el("div", { class: "row wrap addbtns" },
       el("button", { class: "btn primary", type: "button", text: "Save",
                      onclick: save }),
