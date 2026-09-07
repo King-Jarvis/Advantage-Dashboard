@@ -158,8 +158,15 @@ export async function agendaView(root, state) {
     f.allDay.addEventListener("change", syncAllDay);
     syncAllDay();
 
-    const save = el("button", { class: "btn primary", type: "submit",
-      text: existing ? "Save" : "Add event" });
+    // Some events are Google's own -- a birthday from your profile or
+    // contacts -- and it refuses to let an app change them. Saying so here
+    // beats a save that appears to work and quietly reverts three minutes
+    // later when the next sync restores the original.
+    const locked = existing && existing.event_type
+      && existing.event_type !== "default";
+
+    const save = locked ? null : el("button", { class: "btn primary",
+      type: "submit", text: existing ? "Save" : "Add event" });
 
     async function submit(e) {
       e.preventDefault();
@@ -196,9 +203,10 @@ export async function agendaView(root, state) {
     }
 
     const buttons = el("div", { class: "ev-buttons" }, save,
-      el("button", { class: "btn", type: "button", text: "Cancel",
+      el("button", { class: "btn", type: "button",
+        text: locked ? "Close" : "Cancel",
         onclick: () => { editing = null; renderPanel(); } }),
-      existing
+      existing && !locked
         ? el("button", { class: "btn danger", type: "button", text: "Delete",
             onclick: async () => {
               if (!window.confirm(`Delete "${existing.title || "this event"}"? `
@@ -211,8 +219,19 @@ export async function agendaView(root, state) {
             } })
         : null);
 
+    if (locked) {
+      for (const k of Object.keys(f)) f[k].disabled = true;
+    }
+
     return el("form", { class: "ev-form", onsubmit: submit, novalidate: true },
       err,
+      locked
+        ? el("div", { class: "ev-locked" },
+            el("strong", { text: `This is a ${existing.event_type} event that `
+              + "Google made." }),
+            el("span", { text: " It will not let an app change it. Edit it in "
+              + "Google Calendar, or add your own event on this date." }))
+        : null,
       el("div", { class: "field" },
         el("label", { class: "label", for: "ev-title", text: "Event" }), f.title),
       el("div", { class: "ev-row" },

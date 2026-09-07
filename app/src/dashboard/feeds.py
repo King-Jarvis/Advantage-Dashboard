@@ -59,21 +59,22 @@ def upsert_events(conn, account_id, events):
             str(e.get("etag", ""))[:120],
             str(e.get("recurrence", ""))[:300],
             int(e.get("reminder_minutes", -1) or -1),
-            str(e.get("series_id", ""))[:200])
+            str(e.get("series_id", ""))[:200],
+            str(e.get("event_type", "default"))[:40])
         if row:
             conn.execute(
                 "UPDATE events SET calendar_id=?, title=?, description=?,"
                 " location=?, starts_at=?, ends_at=?, all_day=?, status=?,"
                 " updated_at=?, deleted=?, etag=?, recurrence=?,"
-                " reminder_minutes=?, series_id=? WHERE id=?",
+                " reminder_minutes=?, series_id=?, event_type=? WHERE id=?",
                 (*values[2:], row["id"]))
         else:
             conn.execute(
                 "INSERT INTO events (id, account_id, source_uid, calendar_id,"
                 " title, description, location, starts_at, ends_at, all_day,"
                 " status, updated_at, deleted, etag, recurrence,"
-                " reminder_minutes, series_id)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " reminder_minutes, series_id, event_type)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (_id(), *values))
         written += 1
     conn.commit()
@@ -242,6 +243,13 @@ def update_event(conn, event_id, **fields):
                        (event_id,)).fetchone()
     if row is None:
         raise KeyError(event_id)
+    # Refused here rather than three minutes later by Google. A save that
+    # appears to work and silently reverts is worse than one that says no.
+    kind = row["event_type"] if "event_type" in row.keys() else "default"
+    if kind and kind != "default":
+        raise ValueError(
+            "Google will not let an app change a %s event. Edit it in Google "
+            "Calendar, or make your own event on that date." % kind)
 
     merged = {k: row[k] for k in EVENT_FIELDS}
     merged.update({k: v for k, v in fields.items() if v is not None})

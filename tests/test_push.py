@@ -333,3 +333,33 @@ def test_an_all_day_event_names_no_timezone(conn, acct, calls):
                        starts_at="2026-09-15T00:00:00")
     push.run(conn)
     assert "timeZone" not in calls[0]["payload"]["start"]
+
+
+def test_a_permanent_refusal_stops_retrying(conn, acct, monkeypatch):
+    """Retrying for ever keeps a queue that never drains, and leaving the
+    local edit in place means the two copies disagree for good. Clearing the
+    flag lets the next pull restore what Google actually holds."""
+    def refused(*a, **k):
+        raise google_api.Refused("Google will not change a birthday")
+    monkeypatch.setattr(google_api, "_send_retrying", refused)
+
+    eid = an_event(conn, acct)
+    conn.execute("UPDATE events SET dirty=1 WHERE id=?", (eid,))
+    out = push.run(conn)
+
+    r = conn.execute("SELECT dirty, push_error FROM events").fetchone()
+    assert r["dirty"] == 0, "a permanent refusal stayed queued"
+    assert "birthday" in r["push_error"]
+    assert out["results"][0]["failed"] == 1
+
+
+def test_a_transient_failure_still_retries(conn, acct, monkeypatch):
+    """The distinction is the point: only the permanent ones give up."""
+    def boom(*a, **k):
+        raise google_api.GoogleError("network wobble")
+    monkeypatch.setattr(google_api, "_send_retrying", boom)
+
+    eid = an_event(conn, acct)
+    conn.execute("UPDATE events SET dirty=1 WHERE id=?", (eid,))
+    push.run(conn)
+    assert conn.execute("SELECT dirty FROM events").fetchone()[0] == 1

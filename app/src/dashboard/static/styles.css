@@ -1248,3 +1248,11 @@ textarea.input { resize: vertical; min-height: 5.5rem; line-height: 1.45; }
 [data-theme-base="light"] .chip.on {
   border-radius: 999px 999px 998px 999px / 999px 998px 999px 999px;
 }
+
+/* An event Google will not let us change. Said before the save, not after. */
+.ev-locked {
+  display: grid; gap: 0.2rem; padding: 0.6rem 0.75rem; border-radius: 6px;
+  background: var(--warn-tint); border-left: 2px solid var(--warn);
+  font-size: 0.84rem; color: var(--text-2);
+}
+.ev-locked strong { color: var(--text); font-weight: 600; }

@@ -184,6 +184,31 @@ class _Unauthorized(Exception):
     pass
 
 
+class _Replay:
+    """An HTTPError whose body has already been read.
+
+    read() is one-shot on a socket, so once the 400 handler has looked for a
+    restriction the later error-formatting code would find nothing and report
+    a bare status. This hands it the bytes again.
+    """
+
+    def __init__(self, err, body):
+        self._err, self._body = err, body
+        self.code = err.code
+
+    def read(self):
+        return self._body
+
+
+class Refused(Exception):
+    """Google will never accept this, however many times it is retried.
+
+    Distinct from GoogleError, which covers the transient and the fixable. A
+    permanent refusal that retries is a queue that never drains and an edit
+    that never resolves either way.
+    """
+
+
 class GoneError(Exception):
     """Google's sync token has expired. Means start again, not something
     went wrong."""
@@ -216,6 +241,20 @@ def _send(url, token, method="POST", payload=None, etag=None):
             raise _Unauthorized() from None
         if e.code == 412:
             raise Conflict() from None
+        if e.code == 400:
+            body = b""
+            try:
+                body = e.read()
+            except Exception:
+                pass
+            if b"eventTypeRestriction" in body:
+                raise Refused(
+                    "Google does not allow this kind of event to be changed "
+                    "through an app. Birthdays it creates from your profile "
+                    "or contacts are its own -- edit it in Google Calendar, "
+                    "or make your own event on that date."
+                ) from None
+            e = _Replay(e, body)
         reason = ""
         try:
             err = json.loads(e.read().decode()).get("error", {})
@@ -336,6 +375,7 @@ def fetch_events(conn, account_id, days_back=DAYS_BACK, days_ahead=DAYS_AHEAD,
                 "recurrence": (item.get("recurrence") or [""])[0]
                               if item.get("recurrence") else "",
                 "series_id": str(item.get("recurringEventId") or ""),
+                "event_type": str(item.get("eventType") or "default"),
                 "reminder_minutes": _reminder_of(item),
             })
         page = data.get("nextPageToken")

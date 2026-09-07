@@ -201,6 +201,16 @@ def run(conn, account_id=None):
             for row in _pending(conn, table, aid):
                 try:
                     fn(conn, aid, row)
+                except google_api.Refused as e:
+                    # Permanent. Clearing dirty is the point: retrying for
+                    # ever would keep a queue that never drains, and leaving
+                    # the local edit in place would mean the two copies
+                    # disagree for good. The next pull restores what Google
+                    # actually holds, which is the honest resolution.
+                    failed += 1
+                    conn.execute(
+                        "UPDATE %s SET dirty=0, push_error=? WHERE id=?"
+                        % table, (str(e)[:300], row["id"]))
                 except google_api.Conflict:
                     conflicts += 1
                     conn.execute(

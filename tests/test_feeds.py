@@ -545,3 +545,26 @@ def test_a_raw_rule_cannot_be_posted_even_though_stored_ones_survive(conn, acct)
     conn.commit()
     with pytest.raises(ValueError, match="not one of the options"):
         feeds.update_event(conn, eid, recurrence="RRULE:FREQ=SECONDLY")
+
+
+def test_an_event_google_owns_cannot_be_edited(conn, acct):
+    """A save that appears to work and reverts three minutes later is worse
+    than one that says no."""
+    feeds.upsert_events(conn, acct, [
+        ev("bday", "2026-10-04T00:00:00", all_day=1, event_type="birthday")])
+    eid = conn.execute("SELECT id FROM events").fetchone()[0]
+    with pytest.raises(ValueError, match="birthday"):
+        feeds.update_event(conn, eid, title="Renamed")
+
+
+def test_an_ordinary_event_is_still_editable(conn, acct):
+    feeds.upsert_events(conn, acct, [ev("normal", "2026-10-04T09:00:00")])
+    eid = conn.execute("SELECT id FROM events").fetchone()[0]
+    feeds.update_event(conn, eid, title="Renamed")
+    assert conn.execute("SELECT title FROM events").fetchone()[0] == "Renamed"
+
+
+def test_the_event_type_survives_a_sync(conn, acct):
+    feeds.upsert_events(conn, acct, [
+        ev("b", "2026-10-04T00:00:00", event_type="birthday")])
+    assert conn.execute("SELECT event_type FROM events").fetchone()[0] == "birthday"
