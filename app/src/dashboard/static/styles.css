@@ -1320,3 +1320,14 @@ textarea.input { resize: vertical; min-height: 5.5rem; line-height: 1.45; }
   .legend dl { grid-template-columns: 1fr; gap: 0.1rem; }
   .legend dd { margin-bottom: 0.7rem; }
 }
+
+/* Editing a category, tucked inside the opened one. Collapsed because it is
+ * a rare, deliberate act, not part of reading the month. */
+.catedit { margin-top: var(--s4); border-top: 1px solid var(--line); padding-top: var(--s3); }
+.catedit summary {
+  cursor: pointer; color: var(--text-3); font-size: var(--t-label);
+  padding: 0.35em 0;
+}
+.catedit summary:hover { color: var(--text); }
+.catedit .addgrid { margin-top: var(--s2); }
+.catedit .error:empty { display: none; }

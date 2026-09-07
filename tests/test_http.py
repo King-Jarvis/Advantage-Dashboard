@@ -1611,3 +1611,63 @@ def test_an_account_needs_a_name(live):
     status, _, _ = call(live, "POST", "/api/accounts", {"name": "  "},
                         headers={"Cookie": cookie, "X-CSRF-Token": csrf})
     assert status == 400
+
+
+# ── renaming a category ───────────────────────────────────────────────────
+def test_a_category_can_be_renamed_without_touching_its_history(live):
+    """Transactions point at the id, so past months keep their meaning under
+    the new name rather than being re-labelled or orphaned."""
+    from dashboard import ledger
+    from dashboard import storage as st
+    conn = st.connect()
+    gid = ledger.create_category_group(conn, "Everyday")
+    cid = ledger.create_category(conn, gid, "Food")
+    acct = ledger.create_account(conn, "Checking")
+    ledger.add_transaction(conn, acct, "2026-08-01", -1200, "Tesco", cid)
+    conn.close()
+
+    cookie, csrf = login(live)
+    h = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    status, _, _ = call(live, "PATCH", f"/api/categories/{cid}",
+                        {"name": "Groceries"}, headers=h)
+    assert status == 200
+
+    conn = st.connect()
+    row = conn.execute("SELECT name FROM categories WHERE id=?", (cid,)).fetchone()
+    still = conn.execute("SELECT COUNT(*) FROM transactions WHERE category_id=?",
+                         (cid,)).fetchone()[0]
+    conn.close()
+    assert row["name"] == "Groceries"
+    assert still == 1, "renaming lost the transaction"
+
+
+def test_a_category_can_be_moved_between_groups(live):
+    from dashboard import ledger
+    from dashboard import storage as st
+    conn = st.connect()
+    a = ledger.create_category_group(conn, "Everyday")
+    b = ledger.create_category_group(conn, "Bills")
+    cid = ledger.create_category(conn, a, "Water")
+    conn.close()
+
+    cookie, csrf = login(live)
+    call(live, "PATCH", f"/api/categories/{cid}", {"group_id": b},
+         headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+    conn = st.connect()
+    got = conn.execute("SELECT group_id FROM categories WHERE id=?",
+                       (cid,)).fetchone()[0]
+    conn.close()
+    assert got == b
+
+
+def test_an_empty_name_is_refused(live):
+    from dashboard import ledger
+    from dashboard import storage as st
+    conn = st.connect()
+    gid = ledger.create_category_group(conn, "Everyday")
+    cid = ledger.create_category(conn, gid, "Food")
+    conn.close()
+    cookie, csrf = login(live)
+    status, _, _ = call(live, "PATCH", f"/api/categories/{cid}", {"name": "   "},
+                        headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+    assert status == 400

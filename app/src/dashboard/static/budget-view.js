@@ -9,7 +9,7 @@
  * needed to make a decision about a category is one click deep, and nothing
  * else is on screen competing with it.
  */
-import { get, patch, post } from "./api.js";
+import { del, get, patch, post } from "./api.js";
 import { el, money, moneyEl, mount, parseMoney, svg } from "./dom.js";
 import { spendingChart } from "./chart.js";
 
@@ -282,6 +282,78 @@ async function moveMoney(from, to, refresh) {
 }
 
 /* ── the expanded panel ─────────────────────────────────────────────────── */
+/* Renaming, re-grouping and retiring a category.
+ *
+ * Inside the opened category rather than a pencil beside every name: this is
+ * done rarely and deliberately, and an edit control on twenty rows is twenty
+ * chances to mis-tap one.
+ */
+function categoryEditor(cat, refresh) {
+  const name = el("input", { class: "input", type: "text", value: cat.name,
+                             "aria-label": "Category name" });
+  const group = el("select", { class: "input", "aria-label": "Group" });
+  for (const g of state.groups || []) {
+    if (g.is_income) continue;
+    const opt = el("option", { value: g.id, text: g.name });
+    if (g.id === cat.group_id) opt.selected = true;
+    group.append(opt);
+  }
+  const carry = el("input", { type: "checkbox", class: "check" });
+  carry.checked = Boolean(cat.carryover_negative);
+  const err = el("div", { class: "error" });
+
+  async function save() {
+    const label = name.value.trim();
+    if (!label) { err.textContent = "A category needs a name."; return; }
+    try {
+      // Renaming does not touch the transactions: they point at the id, so
+      // past months keep their meaning under the new name.
+      await patch(`/api/categories/${cat.id}`, {
+        name: label, group_id: group.value,
+        carryover_negative: carry.checked,
+      });
+      refresh();
+    } catch (e) {
+      err.textContent = (e && e.message) || "Could not save that.";
+    }
+  }
+
+  async function retire() {
+    if (!window.confirm(`Retire "${cat.name}"?\n\nIf anything has ever been `
+        + "spent here it is hidden rather than deleted, so past months keep "
+        + "their meaning.")) return;
+    try {
+      const r = await del(`/api/categories/${cat.id}`);
+      state.expanded = null;
+      state.note = r.outcome === "deleted"
+        ? `Deleted ${cat.name}.`
+        : `${cat.name} is hidden. Its history is intact.`;
+      refresh();
+    } catch (e) {
+      err.textContent = (e && e.message) || "Could not do that.";
+    }
+  }
+
+  return el("details", { class: "catedit" },
+    el("summary", { text: "Rename or move this category" }),
+    err,
+    el("div", { class: "addgrid" },
+      el("div", { class: "field" },
+        el("span", { class: "label", text: "Name" }), name),
+      el("div", { class: "field" },
+        el("span", { class: "label", text: "Group" }), group),
+      el("div", { class: "field" },
+        el("span", { class: "label", text: "Overspending" }),
+        el("label", { class: "check" }, carry,
+          el("span", { text: "Carry it into next month" })))),
+    el("div", { class: "row wrap addbtns" },
+      el("button", { class: "btn primary", type: "button", text: "Save",
+                     onclick: save }),
+      el("div", { class: "spacer" }),
+      el("button", { class: "btn danger", type: "button", text: "Retire",
+                     onclick: retire })));
+}
+
 function detail(cat, suggestion, refresh) {
   const box = el("div", { class: "detail" },
     el("div", { class: "hint", text: "Loading…" }));
@@ -324,7 +396,8 @@ function detail(cat, suggestion, refresh) {
         el("div", { class: "detail-side" }, facts,
           accept ? el("div", { class: "row" }, accept) : null,
           el("div", { class: "label txnhead", text: "this month" }),
-          el("div", { class: "txns" }, ...rows))));
+          el("div", { class: "txns" }, ...rows),
+          categoryEditor(cat, refresh))));
   }).catch(() => mount(box,
     el("div", { class: "hint", text: "Could not load the detail." })));
 
