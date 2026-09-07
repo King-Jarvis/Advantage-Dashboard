@@ -899,8 +899,18 @@ a:hover { text-decoration: underline; }
 .mail-snip { color: var(--text-3); font-size: 0.82rem; }
 .mail-why { color: var(--text-3); font-size: 0.76rem; font-style: italic; }
 
-.mail-grade { display: flex; gap: 2px; margin-top: 0.25rem; opacity: 0; transition: opacity 120ms; }
-.mail-row:hover .mail-grade, .mail-grade:focus-within { opacity: 1; }
+/* Visible by default, and hidden only where a pointer can hover. The other
+ * way round -- hidden by default, revealed on hover -- means these controls
+ * do not exist at all on a tablet, because there is no hover to reveal them
+ * with. Correcting a score is the whole reason the score is shown, so it
+ * cannot be the thing that disappears on the device you read mail on. */
+.mail-grade { display: flex; gap: 2px; margin-top: 0.25rem; transition: opacity 120ms; }
+@media (hover: hover) and (pointer: fine) {
+  .mail-grade { opacity: 0; }
+  .mail-row:hover .mail-grade,
+  .mail-row.is-open .mail-grade,
+  .mail-grade:focus-within { opacity: 1; }
+}
 .grade {
   width: 1.5em; height: 1.5em; display: grid; place-items: center;
   background: transparent; border: 1px solid var(--line); color: var(--text-3);
@@ -1047,4 +1057,78 @@ a:hover { text-decoration: underline; }
   .ev-row { grid-template-columns: 1fr; align-items: stretch; }
   .ev-allday { padding-bottom: 0; }
   .ev-buttons .btn.danger { margin-left: 0; }
+}
+
+/* ── Touch ─────────────────────────────────────────────────────────────────
+ * Written against an iPad, which is the device this is actually read on.
+ *
+ * The rule that matters most is not in here: anything revealed only on hover
+ * does not exist on a touch screen, so those reveals are gated on
+ * (hover: hover) at their definition rather than patched over here.
+ */
+
+/* Removes the 300ms wait Safari keeps in case a tap becomes a double-tap
+ * zoom. Applied to controls only -- the page itself should still zoom. */
+button, a, input, select, textarea, label, summary {
+  touch-action: manipulation;
+}
+button, a { -webkit-tap-highlight-color: rgba(234, 75, 113, 0.18); }
+
+@media (pointer: coarse) {
+  /* 44px is Apple's minimum and it is not arbitrary: below it, the error rate
+   * on a moving hand climbs sharply. min-height with centred content grows
+   * the target without changing how anything looks. */
+  .btn, .chip, .iconbtn, .grade, .mail-hit, .cal-what, .setrow .btn,
+  .tab, .catrow .btn.ghost {
+    min-height: 44px;
+  }
+  .tab { display: inline-flex; align-items: center; padding: 0 var(--s3); }
+  .tabs { gap: var(--s2); }
+  .iconbtn, .grade {
+    min-width: 44px; display: inline-grid; place-items: center;
+  }
+  .grade { font-size: 0.85rem; }
+  .chip { padding: 0.55em 1em; }
+  .btn.ghost { min-width: 44px; font-size: 1.5rem; }
+
+  /* iOS zooms the whole page when a focused field is under 16px, which throws
+   * away your place on the screen. One pixel of type is a cheap fix. */
+  .input, select, textarea { font-size: max(16px, var(--t-body)); }
+  .input { min-height: 44px; }
+
+  /* A day is a tap target as well as a cell. */
+  .cal-cell { min-height: max(4.6rem, 11vh); }
+  /* Long-press on a calendar cell should not start selecting text. */
+  .cal-cell, .cal-what, .mail-hit {
+    -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none;
+  }
+
+  /* Rows sit further apart: a mis-tap here archives the wrong message. */
+  .mail-row { padding: 0.85rem; gap: 0.7rem; }
+  .mail-actions { gap: 0.35rem; }
+  .cal-day-item { padding: 0.65rem 0; }
+  .ev-buttons { gap: 0.65rem; }
+
+  /* Dimming noise is fine; it un-dims on hover, which never happens here.
+   * Tapping opens the row, and an open row is already full strength. */
+  .mail-row.is-quiet { opacity: 0.68; }
+}
+
+/* iPad in portrait is 768px wide, which the desktop grid can just about take
+ * but the two-column forms cannot. */
+@media (pointer: coarse) and (max-width: 900px) {
+  .ev-times { grid-template-columns: 1fr 1fr; gap: 0.7rem; }
+  .cal-nav { gap: 0.45rem; }
+  .cal-nav .hint { flex-basis: 100%; margin-left: 0; }
+}
+
+/* Dragging a category onto another moves money between them, and HTML5 drag
+ * events never fire on a touch screen. The two-tap Move / Move here flow
+ * beside it does the same job and is the only one that works here, so it is
+ * given room rather than left as the small sibling of a gesture that cannot
+ * happen. */
+@media (pointer: coarse) {
+  .catrow[draggable="true"] { cursor: default; }
+  .catrow .btn.ghost { padding-inline: var(--s3); }
 }
