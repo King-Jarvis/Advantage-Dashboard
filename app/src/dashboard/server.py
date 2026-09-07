@@ -25,6 +25,7 @@ from . import (
     firstrun,
     google_api,
     imageproxy,
+    scheduler,
     security,
     settings,
     statements,
@@ -503,6 +504,7 @@ class Handler(BaseHTTPRequestHandler):
             eid = feeds.create_event(conn, account, **self._event_fields(data))
         except KeyError:
             return self.fail(404, "no such account")
+        scheduler.nudge()
         self.json_out({"id": eid, "pending": True})
 
     def api_evedit(self, conn, session, event_id):
@@ -511,11 +513,13 @@ class Handler(BaseHTTPRequestHandler):
                 feeds.delete_event(conn, event_id)
             except KeyError:
                 return self.fail(404, "no such event")
+            scheduler.nudge()
             return self.json_out({"id": event_id, "deleting": True})
         try:
             feeds.update_event(conn, event_id, **self._event_fields(self.body_json()))
         except KeyError:
             return self.fail(404, "no such event")
+        scheduler.nudge()
         self.json_out({"id": event_id, "pending": True})
 
     def api_calendar(self, conn, session):
@@ -650,6 +654,10 @@ class Handler(BaseHTTPRequestHandler):
             feeds.set_message(conn, message_id, **fields)
         except KeyError:
             return self.fail(404, "no such message")
+        # Straight to Google rather than at the next tick: archiving something
+        # and watching it sit there reads as broken.
+        if fields.keys() & feeds.PUSHABLE:
+            scheduler.nudge()
         self.json_out({"id": message_id, "updated": sorted(fields)})
 
     # ── ingest: the n8n side ──────────────────────────────────────────────

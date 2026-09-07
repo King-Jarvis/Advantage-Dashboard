@@ -5,7 +5,7 @@ import os
 import ssl
 import sys
 
-from . import auth, firstrun, schema, server, storage
+from . import auth, firstrun, scheduler, schema, server, storage
 
 
 def main(argv=None):
@@ -24,6 +24,9 @@ def main(argv=None):
                         "HSTS is sent. Use --cert/--key to serve TLS directly.")
     p.add_argument("--cert", help="PEM certificate; serve HTTPS directly")
     p.add_argument("--key", help="PEM private key for --cert")
+    p.add_argument("--no-sync", action="store_true",
+                   help="do not start the background sync loop. Useful when "
+                        "another copy is already running against this data.")
     p.add_argument("--setup-code", action="store_true",
                    help="print the code that claims an unclaimed install, "
                         "creating it if needed, and exit. Prints nothing and "
@@ -128,6 +131,16 @@ def main(argv=None):
               "    to load -- and it would be serving your finances in the\n"
               "    clear. Put a certificate in front. See docs/SETUP.md.\n"
               % args.host)
+    # Until this existed, push only ran when something called it, so an
+    # archived message stayed archived locally for ever and new mail never
+    # arrived on its own.
+    if not args.no_sync:
+        scheduler.start()
+        print("syncing every %d seconds; edits are sent immediately"
+              % scheduler.DEFAULT_INTERVAL)
+    else:
+        print("background sync disabled (--no-sync)")
+
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
