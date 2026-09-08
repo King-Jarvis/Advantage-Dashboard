@@ -10,15 +10,15 @@
  */
 import { get } from "./api.js";
 import { el, money, moneyEl, mount, svg } from "./dom.js";
+import { fromServer } from "./time.js";
 
 /* Times come off the wire as ISO strings; the widget wants "09:30" and a day
  * marker when it is not today. Reading e.time -- a field the API does not
  * send -- left every row blank, which looked like a styling problem and was
  * not. */
 function whenLabel(e) {
-  const d = new Date(String(e.starts_at).length <= 10
-    ? `${e.starts_at}T00:00:00` : e.starts_at);
-  if (Number.isNaN(d.getTime())) return e.all_day ? "all day" : "";
+  const d = fromServer(e.starts_at, { floating: e.all_day });
+  if (!d) return e.all_day ? "all day" : "";
 
   const today = new Date();
   const sameDay = (a, b) => a.getDate() === b.getDate()

@@ -14,6 +14,7 @@
  */
 import { del, get, patch, post } from "./api.js";
 import { el, mount } from "./dom.js";
+import { fromServer, hhmm } from "./time.js";
 
 const REPEAT_WORDS = {
   "": "Does not repeat",
@@ -40,13 +41,11 @@ const MONTH = ["January", "February", "March", "April", "May", "June", "July",
 function pad(n) { return String(n).padStart(2, "0"); }
 function key(d) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
 
-function parse(iso) {
-  if (!iso) return null;
-  const d = new Date(String(iso).length <= 10 ? `${iso}T00:00:00` : iso);
-  return Number.isNaN(d.getTime()) ? null : d;
+/* An all-day event is a calendar date, not an instant; everything else is
+ * naive UTC and has to be read as such. See time.js. */
+function parse(iso, floating) {
+  return fromServer(iso, { floating: !!floating });
 }
-
-function hhmm(d) { return `${pad(d.getHours())}:${pad(d.getMinutes())}`; }
 
 /* The form works in your own time, the server in UTC. Sending a local wall
  * clock with an offset lets the server do the conversion in one place rather
@@ -71,8 +70,8 @@ function gridStart(year, month) {
 }
 
 function spanDays(e) {
-  const s = parse(e.starts_at);
-  const raw = parse(e.ends_at) || s;
+  const s = parse(e.starts_at, e.all_day);
+  const raw = parse(e.ends_at, e.all_day) || s;
   if (!s) return [];
   // An all-day event's end is exclusive in Google's model: a single day runs
   // to the next midnight. Treating it inclusively paints an extra cell.
@@ -112,8 +111,8 @@ export async function agendaView(root, state) {
    * are the same fields and two forms would drift apart. */
   function eventForm(existing, dayKey) {
     const err = el("div", { class: "error", role: "alert" });
-    const start = existing ? parse(existing.starts_at) : null;
-    const end = existing ? parse(existing.ends_at) : null;
+    const start = existing ? parse(existing.starts_at, existing.all_day) : null;
+    const end = existing ? parse(existing.ends_at, existing.all_day) : null;
 
     const f = {
       title: el("input", { class: "input", type: "text", id: "ev-title",
@@ -288,8 +287,8 @@ export async function agendaView(root, state) {
       // thing and should not look like a loading failure.
       ? el("p", { class: "cal-free", text: "Free." })
       : el("ul", { class: "cal-day-list" }, ...list.map((e) => {
-          const s = parse(e.starts_at);
-          const en = parse(e.ends_at);
+          const s = parse(e.starts_at, e.all_day);
+          const en = parse(e.ends_at, e.all_day);
           const when = e.all_day ? "All day"
             : en && en > s ? `${hhmm(s)} – ${hhmm(en)}` : hhmm(s);
           return el("li", { class: "cal-day-item" },
@@ -349,7 +348,7 @@ export async function agendaView(root, state) {
             title: e.title || "",
           },
             e.all_day ? null : el("span", { class: "cal-chip-t",
-              text: hhmm(parse(e.starts_at)) }),
+              text: hhmm(parse(e.starts_at, e.all_day)) }),
             el("span", { class: "cal-chip-x", text: e.title || "(no title)" }))),
           list.length > 3
             ? el("span", { class: "cal-more", text: `+${list.length - 3} more` })

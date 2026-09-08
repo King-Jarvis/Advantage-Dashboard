@@ -17,6 +17,7 @@
  */
 import { get, patch } from "./api.js";
 import { el, mount } from "./dom.js";
+import { fromServer } from "./time.js";
 
 const WORDS = { 5: "urgent", 4: "important", 3: "worth a look",
                 2: "low", 1: "noise" };
@@ -35,8 +36,12 @@ function gmailLink(m) {
 }
 
 function ago(iso) {
-  const then = new Date(String(iso).length <= 10 ? `${iso}T00:00:00` : iso);
-  if (Number.isNaN(then.getTime())) return "";
+  // Never floating: a message arrived at an instant, wherever you read it.
+  // Reading these as local made anything from the last few hours land in the
+  // future, so it all came out as "just now" -- wrong in the one direction
+  // nobody questions.
+  const then = fromServer(iso);
+  if (!then) return "";
   const mins = Math.round((Date.now() - then.getTime()) / 60000);
   if (mins < 1) return "just now";
   if (mins < 60) return `${mins}m`;

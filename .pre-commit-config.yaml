@@ -34,6 +34,12 @@ repos:
         language: system
         pass_filenames: false
 
+      - id: js-behaviour
+        name: front-end behaviour
+        entry: scripts/check-js-behaviour.sh
+        language: system
+        pass_filenames: false
+
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.21.2
     hooks:
