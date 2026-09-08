@@ -53,12 +53,31 @@ def configure(root):
     return ROOT
 
 
+def private(path):
+    """Owner-only, best effort.
+
+    The directory is already 0700, which is what actually contains these
+    files on this host. The modes matter anyway: a database copied out by a
+    backup script, an rsync that preserves permissions, or a restore into a
+    less careful directory all carry the file's own mode with them, and
+    0644 on a file holding mail and bank records is the wrong default to
+    hand to any of them.
+    """
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
 def log(message):
     line = "%s  %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), message)
     with _log_lock:
         try:
+            existed = os.path.exists(LOGFILE)
             with open(LOGFILE, "a") as fh:
                 fh.write(line)
+            if not existed:
+                private(LOGFILE)
         except OSError:
             pass
 
@@ -77,6 +96,12 @@ def connect(path=None):
     # Without a busy timeout, a concurrent writer raises "database is locked"
     # immediately rather than waiting for a lock that is nearly always brief.
     conn.execute("PRAGMA busy_timeout = 5000")
+    # WAL and the shared-memory index are created beside the database and
+    # carry the same contents, so they get the same treatment.
+    target = path or DBPATH
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(target + suffix):
+            private(target + suffix)
     return conn
 
 

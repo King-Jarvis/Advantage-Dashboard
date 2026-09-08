@@ -117,3 +117,29 @@ def test_reconfiguring_drops_the_stale_connection(tmp_path):
     found = storage.get_conn().execute(
         "SELECT COUNT(*) c FROM accounts WHERE id=?", (a,)).fetchone()["c"]
     assert found == 0, "second database should not see the first one's rows"
+
+
+def test_database_and_log_are_owner_only(tmp_path):
+    """A file holding mail and bank records should not be world-readable.
+
+    The directory is 0700, which is the real containment. These modes are
+    what travels with the file when a backup or restore copies it somewhere
+    less careful.
+    """
+    import os
+    import stat
+
+    from dashboard import storage
+
+    root = str(tmp_path / "data")
+    storage.configure(root)
+    conn = storage.connect()
+    conn.execute("CREATE TABLE t (x)")
+    conn.commit()
+    storage.log("hello")
+
+    assert stat.S_IMODE(os.stat(root).st_mode) == 0o700
+    for name in ("dashboard.db", "dashboard.log"):
+        mode = stat.S_IMODE(os.stat(os.path.join(root, name)).st_mode)
+        assert mode == 0o600, "%s is %o" % (name, mode)
+    conn.close()

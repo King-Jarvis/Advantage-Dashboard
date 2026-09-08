@@ -36,6 +36,9 @@ jobs:
       - name: no markup sinks in front-end
         run: ./scripts/check-no-innerhtml.sh
 
+      - name: documented env vars still exist
+        run: ./scripts/check-env-documented.sh
+
       - name: front-end modules parse
         # No build step means a syntax error is not found until a browser
         # silently renders nothing, with no trace anywhere the server sees.
@@ -104,15 +107,22 @@ jobs:
           print("clean — stdlib plus", ", ".join(sorted(allowed)))
           PY
 
-  docker:
-    name: dockerfile lint
+  manifests:
+    name: dependency manifests agree
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: hadolint
+      - name: the two requirements files must not drift
         run: |
-          if [ -f app/Dockerfile ]; then
-            docker run --rm -i hadolint/hadolint < app/Dockerfile
-          else
-            echo "no Dockerfile yet"
+          # install.sh installs app/requirements.txt; the documented manual
+          # install uses the root one. Two files, one dependency set: if they
+          # disagree, some installs get a different version of the library
+          # that decrypts the tokens.
+          a=$(grep -vE '^\s*(#|$)' requirements.txt | sort)
+          b=$(grep -vE '^\s*(#|$)' app/requirements.txt | sort)
+          if [ "$a" != "$b" ]; then
+            echo "BLOCKED — requirements.txt and app/requirements.txt disagree:"
+            diff <(echo "$a") <(echo "$b") || true
+            exit 1
           fi
+          echo "clean — both pin: $a"

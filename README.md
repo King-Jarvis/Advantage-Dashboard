@@ -36,36 +36,47 @@ confidence. Below three covered months it declines to guess instead of bluffing.
 ## Architecture
 
 ```
-  browser ◀── SSE ──┐
-     │ Google login │
-     ▼              │
+        browser
+           │  HTTPS, session cookie
+           ▼
 ┌──────────────────────────────────────────────┐
-│  dashboard app  (owns the database + tokens) │
-│  local write → repaint → outbox               │
+│  dashboard app                               │
+│    owns the database and the refresh tokens  │
+│    local write → repaint → dirty flag        │
+│    background scheduler: push now, pull on   │
+│                          a timer             │
 └──────────────────────────────────────────────┘
-     ▲ ingest / outbox              │ short-lived token
-┌──────────────────────────────────────────────┐
-│  n8n — scheduler & orchestrator              │
-└──────────────────────────────────────────────┘
-     └── Google APIs ───────────────┘
+           │  OAuth 2.0 + PKCE
+           ▼
+      Google APIs  (Gmail, Calendar)
 ```
 
-The app is the only thing that touches the database and the only holder of refresh tokens.
-Edits are written locally and repaint immediately, then queue in an outbox that n8n drains.
-**The dashboard keeps working when n8n is down** — edits queue and land later, shown as
-pending rather than silently reverted.
+One process. It is the only thing that touches the database and the only holder of refresh
+tokens. An edit is written locally, repaints immediately, and is marked dirty; the
+scheduler thread pushes it to Google at once and pulls fresh state on a timer. A push that
+fails stays dirty and is retried, so nothing is silently lost when Google is unreachable.
+
+There is an optional ingest key that lets an external scheduler such as n8n trigger a sync
+over HTTP. It is off unless you set one, and it opens no route that can read your data.
 
 ## Getting started
 
-Requires Docker and a Google Cloud project. Nothing else.
+Requires Python 3.11+, `git`, `openssl`, and a Google Cloud project.
 
 ```bash
-cp .env.example .env        # then edit it
-./scripts/bootstrap.sh      # generates deploy/secrets/, chmod 600
-docker compose -f deploy/docker-compose.yml up -d
+curl -fsSL https://raw.githubusercontent.com/King-Jarvis/Advantage-Dashboard/main/install.sh | bash
 ```
 
-Full walkthrough in [docs/SETUP.md](docs/SETUP.md), including the Google OAuth steps.
+That fetches the code, builds a virtualenv, generates the encryption key and a
+self-signed certificate, installs a systemd **user** service, starts it, and prints the
+setup code. It asks for no passwords and needs no root. Re-running it updates and
+restarts without ever touching your database, keys or certificate.
+
+Then open the printed URL, create your account, and add your Google client ID and secret
+in Settings — no environment variables and no config file to edit.
+
+Full walkthrough in [docs/SETUP.md](docs/SETUP.md), including the Google OAuth steps and
+running it under systemd.
 
 > **One trap worth knowing up front:** leave your Google OAuth app in *Testing* publishing
 > status and Google expires refresh tokens after seven days, so syncing dies weekly for no
@@ -76,9 +87,13 @@ Full walkthrough in [docs/SETUP.md](docs/SETUP.md), including the Google OAuth s
 This holds your mail, calendar and finances. See [SECURITY.md](.github/SECURITY.md) for
 the threat model and the design decisions behind it.
 
-In short: session auth with CSRF on every mutation, a CSP with no inline script, no markup
-sinks anywhere in the front end (CI enforces this), OAuth with PKCE, secrets mounted as
-files rather than environment variables, and a non-root read-only container.
+In short: session auth with scrypt and CSRF on every mutation, a CSP with no inline
+script, no markup sinks anywhere in the front end (CI enforces this), OAuth with PKCE,
+and refresh tokens plus API keys encrypted at rest with a key held in a file rather than
+an environment variable.
+
+It is built to run on your own network behind your own TLS certificate. It is **not**
+hardened for exposure to the public internet, and nothing here should be port-forwarded.
 
 ## Documentation
 

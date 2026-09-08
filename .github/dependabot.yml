@@ -6,10 +6,13 @@ updates:
     directory: "/"
     schedule: { interval: weekly }
 
+  # Both manifests, because install.sh reads app/requirements.txt while the
+  # documented manual install reads the one at the root. Watching only one
+  # would leave the other pinned to a version nobody is checking.
   - package-ecosystem: pip
-    directory: "/app"
+    directory: "/"
     schedule: { interval: weekly }
 
-  - package-ecosystem: docker
+  - package-ecosystem: pip
     directory: "/app"
     schedule: { interval: weekly }
