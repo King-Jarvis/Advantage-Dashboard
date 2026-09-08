@@ -485,7 +485,17 @@ a:hover { text-decoration: underline; }
 
 .catrow {
   display: grid; align-items: center; gap: var(--s3);
-  grid-template-columns: 180px 1fr 116px 104px auto;
+  /* The name column has to grow the way the type does. It was a flat 180px
+     while --t-body is fluid up to 20px, so the wider the screen the more the
+     longer names outgrew their track -- and a grid item does not shrink to
+     fit, it overflows. "Recreation/Outdoors" needs about 188px at tablet
+     width, and spilled straight over the meter beside it. */
+  /* The money columns are fluid for the same reason: body sets the fluid
+     size, so every figure in the row grows too. "-1,234.56" wants about
+     120px at the top of the scale and had 104. */
+  grid-template-columns:
+    clamp(190px, 18vw, 250px) 1fr clamp(116px, 9vw, 150px)
+    clamp(104px, 8vw, 136px) auto;
   padding: var(--s3) var(--s4) var(--s3) calc(var(--s4) + var(--bar));
   border-top: 1px solid var(--line);
 }
@@ -499,8 +509,17 @@ a:hover { text-decoration: underline; }
 .catrow .name {
   justify-content: flex-start; padding-left: 0; gap: var(--s2);
   min-height: 30px; text-align: left;
+  /* Grid items default to min-width:auto, which means "never smaller than
+     your content" -- so without this the button refuses to shrink and
+     overflows instead. This is what actually permits the ellipsis below. */
+  min-width: 0;
 }
-.catrow .chev { color: var(--text-4); font-size: 10px; }
+/* The guarantee. However long a name is, and whatever the type scale does at
+   some width nobody has tried, it can no longer reach the next column. */
+.catrow .name > span:first-child {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.catrow .chev { color: var(--text-4); font-size: 10px; flex: none; }
 .catrow .amount {
   text-align: right; font-family: var(--mono);
   font-variant-numeric: tabular-nums;
