@@ -27,8 +27,12 @@ SPEC = {
 
     "enable_llm_categories": ("bool", False,
                               "Send unknown merchant names for categorising"),
+    # No longer a dead switch: it now gates the savings plan's one model
+    # call, which sends category names and nothing else.
     "enable_spending_analysis": ("bool", False,
-                                 "Send category totals for written analysis"),
+                                 "Let a model sort your categories by how "
+                                 "movable they are. Sends category names "
+                                 "only -- never amounts"),
     "classify_model":    ("text", "claude-haiku-4-5", "Model used for both"),
 
     "mail_poll_seconds": ("int", 30, "How often mail is checked"),
@@ -77,7 +81,7 @@ LABELS = {
     "baseline_window_months": "History window (months)",
     "min_months_for_suggestion": "Minimum months to suggest",
     "enable_llm_categories": "Categorise unknown merchants",
-    "enable_spending_analysis": "Written spending analysis",
+    "enable_spending_analysis": "Sort categories for the savings plan",
     "classify_model": "Model",
     "mail_poll_seconds": "Mail check (seconds)",
     "calendar_poll_seconds": "Calendar check (seconds)",
@@ -190,6 +194,8 @@ def export_env(conn):
     """
     return {
         "ENABLE_LLM_CATEGORIES": "true" if get(conn, "enable_llm_categories") else "",
+        "ENABLE_SPENDING_ANALYSIS":
+            "true" if get(conn, "enable_spending_analysis") else "",
         "CLASSIFY_MODEL": get(conn, "classify_model"),
         "ANTHROPIC_API_KEY": get(conn, "anthropic_api_key"),
     }

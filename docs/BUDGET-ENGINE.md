@@ -44,25 +44,40 @@ class is what lets the interface say *set aside £100 a month for this*.
 
 ## What the model does
 
-**Nothing.** No model touches the budget engine at all.
+**It never produces, adjusts or sees a number.**
 
-An earlier plan had one writing a one-line rationale beside each figure and flagging
-patterns across categories. It was never built, and this document described it as though
-it had been. The `enable_spending_analysis` setting is the leftover switch; it is read by
-nothing.
+That constraint is the whole design. Models are unreliable at arithmetic over hundreds of
+rows, and a figure you cannot reproduce is not a budget. Every number in this engine and
+in the savings plan is recomputable from the same inputs by running the code again.
 
-That leaves the engine entirely deterministic, which is the property worth keeping.
-Models are unreliable at arithmetic over hundreds of rows, and a figure you cannot
-reproduce is not a budget. Every number here is recomputable from the same inputs by
-running `stats.py` again.
+What it does instead is one judgement about language: given a category *name*, how much
+freedom does someone have to spend less on it? "Rent" is contractual, "Going Out" is not.
+That is a question about what words mean, which is what a model is actually good at, and
+it is a question arithmetic cannot answer at all — `stats.py` can see that Rent costs
+£519 a month but has no way to know you cannot simply decide to pay less.
+
+The answer is one of three words per category, stored on the category. The savings plan
+then does its own arithmetic from your own months. Change the word and the numbers change
+deterministically; the model is not consulted again.
+
+Your answer outranks the model's. A flexibility you set by hand is never overwritten,
+because you know which of your bills are actually fixed and the model is guessing from a
+label you wrote.
 
 ## Privacy
 
-Nothing in this engine leaves the machine.
+The budget engine sends nothing anywhere. Every figure is computed on the machine.
 
-The one model call anywhere in the application is merchant categorisation, which is a
-separate feature, off by default, and sends normalised merchant names and your category
-names — never amounts, dates, balances or account numbers.
+The savings plan's classification step sends **category names only** — the labels you
+typed, such as "Eating Out" and "Rent". Not amounts, not dates, not payees, not balances,
+not account numbers, and not the plan itself. The judgement does not depend on the
+amounts, so they are not sent: "Rent" is contractual whether it is £200 or £2,000.
+
+It is off unless you enable it in Settings, and the answer is cached on each category, so
+it runs once per category ever. Pressing the button again with nothing new costs nothing.
+
+Merchant categorisation is a separate feature with the same shape: normalised merchant
+names only, off by default.
 
 ## Confidence
 

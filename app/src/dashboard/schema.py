@@ -11,7 +11,7 @@ operation is not optional.
 
 import json
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 # Foreign keys are off by default in SQLite and must be enabled per
 # connection, not once per database. Enforced in storage.connect().
@@ -378,6 +378,14 @@ ADDED_COLUMNS = [
     # catches the ones nobody predicted.
     ("events", "push_attempts", "INTEGER NOT NULL DEFAULT 0"),
     ("messages", "push_attempts", "INTEGER NOT NULL DEFAULT 0"),
+    # How much room this category has to be cut, for the savings plan.
+    # '' means nobody has decided yet. Rent cannot be budgeted down by
+    # wanting it to be; a restaurant habit can.
+    ("categories", "flexibility", "TEXT NOT NULL DEFAULT ''"),
+    # 'you' or 'model'. A judgement you made by hand is never overwritten by
+    # the next classification run -- you know which of these you cannot
+    # actually change, and the model is guessing from a name.
+    ("categories", "flexibility_source", "TEXT NOT NULL DEFAULT ''"),
 ]
 
 

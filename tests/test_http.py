@@ -2238,3 +2238,106 @@ def test_the_batch_list_says_which_account_each_went_to(live):
     b = d["batches"][0]
     assert b["account_id"] == acct
     assert b["account"] == "Everyday Checking"
+
+
+# ── the savings plan ──────────────────────────────────────────────────────
+def _seed_savings(port):
+    """Four covered months of one category, so a plan can be built."""
+    from dashboard import ledger, stats, storage
+    conn = storage.connect()
+    acct = ledger.create_account(conn, "Checking")
+    grp = ledger.create_category_group(conn, "Everyday")
+    cat = ledger.create_category(conn, grp, "Eating Out")
+    ms = stats.month_range("2025-08", 4)
+    for m, amount in zip(ms, (100_00, 200_00, 300_00, 400_00), strict=True):
+        conn.execute(
+            "INSERT OR REPLACE INTO month_coverage (account_id, month,"
+            " txn_count, first_day, last_day) VALUES (?,?,?,?,?)",
+            (acct, m, 1, m + "-01", m + "-28"))
+        ledger.add_transaction(conn, acct, "%s-10" % m, -amount, "Cafe", cat)
+    conn.commit()
+    conn.close()
+    return {"acct": acct, "cat": cat}
+
+
+def test_the_savings_plan_needs_a_session(live):
+    status, _, _ = call(live, "GET", "/api/view/savings")
+    assert status == 401
+
+
+def test_the_savings_plan_targets_a_month_you_have_had(live):
+    cookie, _ = login(live)
+    ids = _seed_savings(live)
+    status, _, body = call(live, "GET", "/api/view/savings?month=2025-08",
+                           headers={"Cookie": cookie})
+    assert status == 200, body
+    row = next(c for c in body["categories"] if c["category_id"] == ids["cat"])
+    # Unclassified, so treated as "semi": p40 of [100,200,300,400] is 220.
+    assert row["flexibility"] == "semi"
+    assert row["target_cents"] == 220_00
+    assert row["target_cents"] <= row["expected_cents"]
+    assert body["saves_cents"] == sum(c["saves_cents"] for c in body["categories"])
+
+
+def test_changing_a_flexibility_needs_csrf(live):
+    cookie, _ = login(live)
+    ids = _seed_savings(live)
+    status, _, _ = call(live, "PATCH", f"/api/savings/flexibility/{ids['cat']}",
+                        {"flexibility": "essential"}, headers={"Cookie": cookie})
+    assert status == 403
+
+
+def test_marking_a_category_essential_stops_it_being_cut(live):
+    cookie, csrf = login(live)
+    ids = _seed_savings(live)
+    hdrs = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    status, _, _ = call(live, "PATCH", f"/api/savings/flexibility/{ids['cat']}",
+                        {"flexibility": "essential"}, headers=hdrs)
+    assert status == 200
+    _, _, body = call(live, "GET", "/api/view/savings?month=2025-08",
+                      headers={"Cookie": cookie})
+    row = next(c for c in body["categories"] if c["category_id"] == ids["cat"])
+    assert row["saves_cents"] == 0
+    assert row["flexibility_source"] == "you"
+
+
+def test_an_invented_flexibility_is_a_400(live):
+    cookie, csrf = login(live)
+    ids = _seed_savings(live)
+    status, _, _ = call(live, "PATCH", f"/api/savings/flexibility/{ids['cat']}",
+                        {"flexibility": "free"},
+                        headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+    assert status == 400
+
+
+def test_applying_the_plan_sets_only_the_categories_you_name(live):
+    cookie, csrf = login(live)
+    ids = _seed_savings(live)
+    hdrs = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    status, _, body = call(live, "POST", "/api/savings/apply/2025-08",
+                           {"category_ids": [ids["cat"]]}, headers=hdrs)
+    assert status == 200 and body["applied"] == 1
+
+    from dashboard import ledger, storage
+    conn = storage.connect()
+    assert ledger.get_budget(conn, "2025-08", ids["cat"]) == 220_00
+    conn.close()
+
+
+def test_applying_the_plan_with_no_categories_is_refused(live):
+    cookie, csrf = login(live)
+    _seed_savings(live)
+    status, _, _ = call(live, "POST", "/api/savings/apply/2025-08",
+                        {"category_ids": []},
+                        headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+    assert status == 400
+
+
+def test_classifying_sends_nothing_when_the_feature_is_off(live):
+    cookie, csrf = login(live)
+    _seed_savings(live)
+    status, _, body = call(live, "POST", "/api/savings/classify", {},
+                           headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+    assert status == 200
+    assert body["allowed"] is False
+    assert body["asked"] == 0

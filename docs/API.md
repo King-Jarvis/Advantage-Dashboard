@@ -104,6 +104,17 @@ Secrets are write-only: the API reports whether one is set, never its value.
 | GET \| POST | `/api/themes` | Installed themes, or import one |
 | POST \| DELETE | `/api/themes/{id}` | Activate or delete a theme |
 
+## Saving — session + CSRF
+
+A savings plan built from your own months. Every target is a figure your statements show you have already spent, and fixed costs are left alone. The model sets how movable a category is; it never produces, adjusts or sees a number.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/view/savings` | What each category could cost instead of what it does, with the total it frees up |
+| POST | `/api/savings/classify` | Sort unclassified categories by how movable they are. Sends names only, once each |
+| PATCH | `/api/savings/flexibility/{id}` | Correct one category's flexibility. Yours is never overwritten by the model |
+| POST | `/api/savings/apply/{month}` | Set this month's budget to the plan's targets, for the categories you name |
+
 ## Sync — session + CSRF
 
 The same work the background scheduler does, on demand.
@@ -125,5 +136,5 @@ For an external scheduler. Closed unless you set an ingest key, and it opens no 
 
 ---
 
-71 routes.
+75 routes.
 Regenerate with `./scripts/gen-api-doc.py`.

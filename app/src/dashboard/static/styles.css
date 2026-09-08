@@ -1480,3 +1480,40 @@ textarea.input { resize: vertical; min-height: 5.5rem; line-height: 1.45; }
 }
 .impfold > summary:hover { color: var(--text); }
 .impfold[open] > summary { margin-bottom: var(--s2); }
+
+/* ── the savings plan ─────────────────────────────────────────────────────
+   A sibling of .catrow rather than a reuse of it: this row answers a
+   different question and carries different controls, and inheriting the
+   budget row's drag handles and amount box would mean styling around them.
+   Everything here is a token, so it follows the active theme. */
+.saverow {
+  display: grid; align-items: center;
+  grid-template-columns: auto 1fr auto auto auto auto;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  border-top: 1px solid var(--line);
+}
+.saverow .sname { font-weight: 500; }
+.saverow .arrow { color: var(--text-4); }
+.saverow .was { color: var(--text-3); text-decoration: line-through; }
+.saverow.locked .was { text-decoration: none; }
+.saverow .why {
+  grid-column: 2 / -1;
+  font-size: var(--t-micro); color: var(--text-4);
+  display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap;
+}
+.saverow .flex { max-width: 150px; }
+
+@media (max-width: 620px) {
+  .saverow { grid-template-columns: auto 1fr auto; }
+  /* The old figure is the first thing to go when there is no room: the
+     target and what it saves are what the row is for. */
+  .saverow .was, .saverow .arrow { display: none; }
+  .saverow .why { grid-column: 1 / -1; }
+}
+
+.note {
+  padding: var(--s3) var(--s4);
+  background: var(--ok-tint); color: var(--ok);
+  border-radius: var(--radius); font-size: var(--t-small);
+}

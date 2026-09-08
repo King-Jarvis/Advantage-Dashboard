@@ -40,10 +40,12 @@ influences control flow — the worst outcome is a wrong score on one email.
 writes the accompanying sentence. A budget you cannot reproduce or audit is
 worse than no budget.
 
-**Merchant names only.** The single outbound model call sends normalised merchant
-names and your own category names, so an unfamiliar payee can be filed. It does
-not send amounts, dates, balances, account numbers or message contents, and it
-is off unless you enable it in Settings.
+**Names only.** Two features can call a model, both off by default and both
+enabled separately in Settings. Filing an unfamiliar merchant sends normalised
+merchant names and your category names. The savings plan sends category names
+alone, to judge which are contractual. Neither sends amounts, dates, balances,
+account numbers or message contents, and neither lets the model produce a
+number: it returns a label, and the arithmetic is done here.
 
 ## Known limitations
 

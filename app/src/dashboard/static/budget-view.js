@@ -11,6 +11,7 @@
  */
 import { del, get, patch, post } from "./api.js";
 import { ledgerView } from "./ledger-view.js";
+import { savingsView } from "./savings-view.js";
 import { el, keepingPlace, money, moneyEl, mount, parseMoney, svg }
   from "./dom.js";
 import { spendingChart } from "./chart.js";
@@ -18,6 +19,7 @@ import { spendingChart } from "./chart.js";
 const state = {
   month: null, data: null, suggestions: null, coverage: null, groups: null,
   expanded: null, moveFrom: null, adding: false, error: "", splitting: null,
+  saving: false,
   organising: false,
 };
 
@@ -81,6 +83,14 @@ function header(onMonth, refresh) {
       el("button", { class: "btn ghost", type: "button", text: "›",
                      "aria-label": "Next month", onclick: () => shift(1) }),
       el("div", { class: "spacer" }),
+      el("button", { class: "btn", type: "button", text: "Spend less",
+                     onclick: () => {
+                       // Same reason as "Where things are filed": refresh(true)
+                       // re-renders this screen and never re-enters
+                       // budgetView, which is where the handover happens.
+                       state.saving = true;
+                       refresh();
+                     } }),
       el("button", { class: "btn", type: "button", text: "Where things are filed",
                      onclick: () => {
                        state.organising = true;
@@ -546,6 +556,14 @@ export async function budgetView(container, month, onMonth) {
         // their totals are not what they were when this screen was left.
         return budgetView(container, month, onMonth);
       },
+    });
+  }
+  if (state.saving) {
+    return savingsView(container, month, () => {
+      state.saving = false;
+      // Reloaded: accepting the plan changes this month's budgeted amounts,
+      // so the envelopes behind this screen are not what they were.
+      return budgetView(container, month, onMonth);
     });
   }
   const [data, groups] = await Promise.all([

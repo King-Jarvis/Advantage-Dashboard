@@ -78,6 +78,14 @@ PURPOSE = {
     "groups": "Category groups: list, or create",
     "setbudget": "Set one envelope's amount for a month",
     "movemoney": "Move budgeted money between envelopes",
+    "savings": "What each category could cost instead of what it does, with"
+               " the total it frees up",
+    "savesort": "Sort unclassified categories by how movable they are. Sends"
+                " names only, once each",
+    "saveflex": "Correct one category's flexibility. Yours is never"
+                " overwritten by the model",
+    "saveall": "Set this month's budget to the plan's targets, for the"
+               " categories you name",
 }
 
 GROUPS = [
@@ -104,6 +112,12 @@ GROUPS = [
      "Secrets are write-only: the API reports whether one is set, never its value.",
      ["settings", "setting", "g_check", "g_connect", "g_accts", "g_acct",
       "themes", "theme1"]),
+    ("Saving", "session + CSRF",
+     "A savings plan built from your own months. Every target is a figure "
+     "your statements show you have already spent, and fixed costs are left "
+     "alone. The model sets how movable a category is; it never produces, "
+     "adjusts or sees a number.",
+     ["savings", "savesort", "saveflex", "saveall"]),
     ("Sync", "session + CSRF",
      "The same work the background scheduler does, on demand.",
      ["sync_ses"]),
