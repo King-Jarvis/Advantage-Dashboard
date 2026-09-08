@@ -16,6 +16,18 @@ repos:
         language: system
         pass_filenames: false
 
+      - id: api-doc
+        name: API reference matches the routing table
+        entry: scripts/gen-api-doc.py --check
+        language: system
+        pass_filenames: false
+
+      - id: env-documented
+        name: documented env vars still exist
+        entry: scripts/check-env-documented.sh
+        language: system
+        pass_filenames: false
+
       - id: js-syntax
         name: front-end modules parse
         entry: scripts/check-js-syntax.sh

@@ -26,12 +26,16 @@ Every suggested figure is computed from your own statement history with determin
 statistics: a rolling 12 covered months, outliers trimmed, classified as fixed recurring,
 variable recurring, or an annual cost that should be a monthly sinking fund.
 
-A language model writes the one-line rationale. **It never produces or adjusts a number.**
-Models are unreliable at arithmetic over hundreds of rows, and a budget you cannot
-reproduce or audit is worse than no budget.
+**No model is involved in any of it.** Models are unreliable at arithmetic over hundreds
+of rows, and a budget you cannot reproduce or audit is worse than no budget — so every
+figure here comes from your own statements and can be traced back to them.
 
 Confidence is shown rather than hidden — the chart draws a band, and its width is the
 confidence. Below three covered months it declines to guess instead of bluffing.
+
+The one place a model is used at all is naming a category for a merchant it has not seen
+before, and only if you switch that on. Even then it chooses from categories you already
+created, and an answer that names anything else is discarded.
 
 ## Architecture
 

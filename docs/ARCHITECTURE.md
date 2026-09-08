@@ -2,11 +2,18 @@
 
 ## Shape
 
-Two processes: the **dashboard app**, which owns the database, the ledger and
-the OAuth tokens, and **n8n**, which schedules and orchestrates.
+One process: the **dashboard app**, which owns the database, the ledger, the
+OAuth tokens and its own scheduling.
 
-The app is the only thing that touches the database. n8n never holds Google
-credentials — it asks the app for a short-lived access token per run.
+This was originally two, with n8n scheduling and orchestrating. That never got
+built, and for a while nothing scheduled anything — an edit was pushed to Google
+only if something happened to call the sync, which nothing did. `scheduler.py`
+is that missing half, and it lives in the app because a background thread that
+pushes an edit and pulls on a timer does not need a workflow engine.
+
+The ingest routes n8n would have used still exist and are still tested, so an
+external scheduler can drive a sync if you ever want one. They are closed unless
+you set an ingest key.
 
 ## Why the app owns the ledger
 
@@ -14,8 +21,8 @@ The alternative was running Actual Budget underneath and syncing to it. That
 buys proven envelope math and bank feeds, at the cost of a second service and a
 repository that cannot be run without it.
 
-Owning the ledger means `git clone && docker compose up` genuinely works with no
-external dependency, and there is one SQLite file rather than a sync boundary
+Owning the ledger means one install script genuinely works with no external
+dependency, and there is one SQLite file rather than a sync boundary
 between two systems. The price is that transfers, splits, reconciliation and
 month rollover are ours to get right — which is why the ledger has an invariant
 test suite and was built before anything that depends on it.
@@ -35,7 +42,7 @@ workflow engine that also runs user-authored code.
 
 Editing must feel instant and also be durable. Those pull apart: a synchronous
 write to Google would make every edit wait on a round trip, and would fail
-entirely when n8n is down.
+entirely whenever Google was unreachable.
 
 An edit writes to SQLite, marks the row `dirty`, and repaints in the same
 request. A row is appended to `outbox`. `outbox-drain` applies pending rows

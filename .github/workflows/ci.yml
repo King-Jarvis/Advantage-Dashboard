@@ -39,6 +39,9 @@ jobs:
       - name: documented env vars still exist
         run: ./scripts/check-env-documented.sh
 
+      - name: API reference matches the routing table
+        run: ./scripts/gen-api-doc.py --check
+
       - name: front-end modules parse
         # No build step means a syntax error is not found until a browser
         # silently renders nothing, with no trace anywhere the server sees.

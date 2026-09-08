@@ -44,17 +44,25 @@ class is what lets the interface say *set aside £100 a month for this*.
 
 ## What the model does
 
-It writes the one-line rationale, and flags qualitative patterns across categories.
+**Nothing.** No model touches the budget engine at all.
 
-**It does not produce or adjust any number.** Models are unreliable at arithmetic over
-hundreds of rows, and a figure you cannot reproduce is not a budget. Every number here is
-recomputable from the same inputs by running `stats.py` again.
+An earlier plan had one writing a one-line rationale beside each figure and flagging
+patterns across categories. It was never built, and this document described it as though
+it had been. The `enable_spending_analysis` setting is the leftover switch; it is read by
+nothing.
+
+That leaves the engine entirely deterministic, which is the property worth keeping.
+Models are unreliable at arithmetic over hundreds of rows, and a figure you cannot
+reproduce is not a budget. Every number here is recomputable from the same inputs by
+running `stats.py` again.
 
 ## Privacy
 
-The model receives category totals per covered month. It does not receive transactions,
-payees, account numbers or dates. Per-payee categorisation sends one normalised payee
-string and nothing else. The whole feature is off unless `ENABLE_SPENDING_ANALYSIS=true`.
+Nothing in this engine leaves the machine.
+
+The one model call anywhere in the application is merchant categorisation, which is a
+separate feature, off by default, and sends normalised merchant names and your category
+names — never amounts, dates, balances or account numbers.
 
 ## Confidence
 
