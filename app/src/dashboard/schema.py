@@ -433,10 +433,14 @@ def migrate(conn):
     for table, name, decl in ADDED_COLUMNS:
         add_column(conn, table, name, decl)
     _seed_themes(conn)
-    cur = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'")
-    row = cur.fetchone()
-    if row is None:
-        conn.execute("INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
-                     (str(SCHEMA_VERSION),))
+    # Written every time, not only on a fresh database. Recording it once at
+    # creation and never again left every existing install claiming version 1
+    # while the code was on 7 -- and migrate() returned the constant, so the
+    # number looked right to anything that asked the code instead of the file.
+    # Nothing branches on it yet. The first migration that needs to run
+    # exactly once would have, silently and wrongly.
+    conn.execute("INSERT INTO meta (key, value) VALUES ('schema_version', ?)"
+                 " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                 (str(SCHEMA_VERSION),))
     conn.commit()
     return SCHEMA_VERSION

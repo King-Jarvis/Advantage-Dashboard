@@ -71,3 +71,27 @@ def test_each_declaration_is_valid_sql(tmp_path, table, name, decl):
     schema.migrate(c)
     c.execute("ALTER TABLE %s ADD COLUMN probe_%s %s" % (table, name, decl))
     c.close()
+
+
+def test_the_recorded_version_follows_the_code(tmp_path):
+    """An install that predates a migration must not keep claiming its old
+    version. It did: the row was written once at creation and never updated,
+    so every existing database said 1 while the code was on 7.
+    """
+    import sqlite3
+
+    from dashboard import schema
+
+    db = tmp_path / "d.db"
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    schema.migrate(conn)
+
+    conn.execute("UPDATE meta SET value='1' WHERE key='schema_version'")
+    conn.commit()
+
+    schema.migrate(conn)
+    recorded = conn.execute(
+        "SELECT value FROM meta WHERE key='schema_version'").fetchone()["value"]
+    assert int(recorded) == schema.SCHEMA_VERSION
+    conn.close()
