@@ -35,6 +35,17 @@ SPEC = {
                                  "only -- never amounts"),
     "classify_model":    ("text", "claude-haiku-4-5", "Model used for both"),
 
+    # Money to Apple Pay, Venmo or a loan is a movement out to somewhere you
+    # do not hold an account, so its second half is in no statement you will
+    # ever import. The pairing scan cannot match it and should not try: two
+    # equal amounts weeks apart are then a coincidence dressed as a transfer.
+    # Editable because every bank words these differently.
+    "transfer_exclusions": ("text",
+                            "apple pay, venmo, cash app, zelle, paypal, "
+                            "loan, western union, wise, revolut",
+                            "Comma-separated. Payees containing any of these "
+                            "are left out of the transfer scan"),
+
     "mail_poll_seconds": ("int", 30, "How often mail is checked"),
     "calendar_poll_seconds": ("int", 30, "How often the calendar is checked"),
     # 2, not 3: on a real mailbox a threshold of 3 hides everything that is
@@ -92,6 +103,7 @@ LABELS = {
     "base_url": "Dashboard address",
     "google_client_id": "Google client ID",
     "google_client_secret": "Google client secret",
+    "transfer_exclusions": "Never scan these as transfers",
     "ingest_key": "n8n ingest key",
 }
 

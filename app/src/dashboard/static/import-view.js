@@ -17,7 +17,8 @@ const state = {
   addingAccount: false,
   unfiled: [], allCats: [], unfiledBand: "in", showFiled: false,
   tracking: [], transfers: [], candidates: [], history: [],
-  nearMisses: [], unpaired: [], scanned: false, scanning: false,
+  nearMisses: [], unpaired: [], outside: [], exclusions: [],
+  scanned: false, scanning: false,
   historyOpen: false, transfersOpen: null, lastAccount: null,
 };
 
@@ -222,6 +223,8 @@ async function scanTransfers(refresh) {
     state.transfers = r.transfers || [];
     state.nearMisses = r.near_misses || [];
     state.unpaired = r.unpaired || [];
+    state.outside = r.outside || [];
+    state.exclusions = r.exclusions || [];
     state.scanned = true;
     const found = state.candidates.length;
     state.note = found
@@ -279,15 +282,12 @@ function scanFindings(refresh) {
   if (state.unpaired.length) {
     const n = state.unpaired.length;
     bits.push(el("div", { class: "label xferhead",
-                          text: "no other half in the ledger" }));
+                          text: "between your accounts, but unpaired" }));
     bits.push(el("div", { class: "hint",
-      text: `${n} movement${n === 1 ? "" : "s"} whose matching row is not `
-          + "here at all — money that went to Apple Pay, Venmo, a loan or "
-          + "another person. No scan will ever pair these, however wide. "
-          + (state.tracking.length
-             ? "Use \u201cSend to\u201d on the row to record where it went."
-             : "Add an off-budget account for the place it went (Wallet), "
-               + "then use \u201cSend to\u201d on the row.") }));
+      text: `${n} movement${n === 1 ? "" : "s"} that reads as going between `
+          + "two of your own accounts, with nothing here that cancels it. "
+          + "Usually the other account's statement has not been imported for "
+          + "that month." }));
     for (const r of state.unpaired.slice(0, 12)) {
       bits.push(el("div", { class: "xfer-row" },
         el("div", { class: "grow" },
@@ -298,6 +298,29 @@ function scanFindings(refresh) {
     if (n > 12) {
       bits.push(el("div", { class: "hint", text: `and ${n - 12} more.` }));
     }
+  }
+
+  /* Said out loud rather than quietly skipped. A scan that ignores a third
+   * of what looks like a transfer is one you stop trusting the moment you
+   * notice, and the rows are still sitting there to be noticed. */
+  if (state.outside.length) {
+    const n = state.outside.length;
+    bits.push(el("details", { class: "legend" },
+      el("summary", { text: `${n} left out of the scan on purpose` }),
+      el("div", { class: "node-body flush" },
+        el("div", { class: "hint",
+          text: "Money out to somewhere you hold no account — "
+              + (state.exclusions.join(", ") || "nothing configured")
+              + ". The other half is in a statement you will never import, so "
+              + "pairing these can only ever match a coincidence. Change the "
+              + "list in Settings under \u201cNever scan these as "
+              + "transfers\u201d." }),
+        ...state.outside.slice(0, 15).map((r) => el("div", { class: "xfer-row" },
+          el("div", { class: "grow" },
+            el("div", { text: r.payee || "—" }),
+            el("div", { class: "hint", text: `${r.date} · ${r.account}` })),
+          moneyEl(r.amount_cents, "xfer-amt"))),
+        n > 15 ? el("div", { class: "hint", text: `and ${n - 15} more.` }) : null)));
   }
 
   if (!bits.length) {

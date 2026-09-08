@@ -563,7 +563,25 @@ def absorbed_overspend_through(conn, month):
 TRANSFER_WINDOW_DAYS = 4
 
 
-def transfer_candidates(conn, limit=100):
+def split_terms(text):
+    """A comma-separated setting to a list of lowercase terms."""
+    return [t.strip().lower() for t in (text or "").split(",") if t.strip()]
+
+
+def goes_outside(payee, terms):
+    """Is this money leaving for somewhere you hold no account?
+
+    Apple Pay, Venmo, a loan servicer. The second half of such a movement is
+    in a statement that will never be imported, so no window is wide enough
+    to pair it -- and offering it as a candidate is worse than saying
+    nothing, because an equal and opposite amount weeks away is a coincidence
+    wearing the shape of a transfer.
+    """
+    text = (payee or "").lower()
+    return any(t in text for t in terms)
+
+
+def transfer_candidates(conn, limit=100, exclude=()):
     """Unpaired rows that look like two halves of one movement.
 
     Matched on the amount being exactly opposite, the accounts differing, and
@@ -582,6 +600,9 @@ def transfer_candidates(conn, limit=100):
         " JOIN accounts a ON a.id = t.account_id"
         " WHERE t.deleted=0 AND t.transfer_id IS NULL AND t.parent_id IS NULL"
         " ORDER BY t.date").fetchall()
+    # Both halves, not just the one leaving: a payment to Apple Pay is no more
+    # pairable when it is the incoming side of the guess.
+    rows = [r for r in rows if not goes_outside(r["payee"], exclude)]
     outs = [r for r in rows if r["amount_cents"] < 0]
     ins = [r for r in rows if r["amount_cents"] > 0]
 
@@ -612,7 +633,7 @@ def transfer_candidates(conn, limit=100):
     return pairs
 
 
-def near_misses(conn, window_days=45, limit=40):
+def near_misses(conn, window_days=45, limit=40, exclude=()):
     """Amounts that cancel across two accounts, but too far apart to propose.
 
     The strict scan is deliberately narrow: two equal and opposite amounts in
@@ -633,6 +654,7 @@ def near_misses(conn, window_days=45, limit=40):
         " JOIN accounts a ON a.id = t.account_id"
         " WHERE t.deleted=0 AND t.transfer_id IS NULL AND t.parent_id IS NULL"
         " ORDER BY t.date").fetchall()
+    rows = [r for r in rows if not goes_outside(r["payee"], exclude)]
     outs = [r for r in rows if r["amount_cents"] < 0]
     ins = [r for r in rows if r["amount_cents"] > 0]
 
@@ -670,7 +692,32 @@ def near_misses(conn, window_days=45, limit=40):
     return pairs
 
 
-def unpaired_movements(conn, limit=40):
+def outside_movements(conn, exclude, limit=60):
+    """Movements the scan deliberately left alone.
+
+    Reported rather than hidden. A scan that silently skips a third of what
+    looks like a transfer is one you stop trusting the moment you notice --
+    and noticing is inevitable, because the rows are still sitting there
+    uncategorised.
+    """
+    rows = conn.execute(
+        "SELECT t.id, t.date, t.amount_cents, t.payee, a.name account"
+        " FROM transactions t JOIN accounts a ON a.id = t.account_id"
+        " WHERE t.deleted=0 AND t.transfer_id IS NULL AND t.parent_id IS NULL"
+        " ORDER BY t.date DESC").fetchall()
+    out = []
+    for r in rows:
+        if not goes_outside(r["payee"], exclude):
+            continue
+        out.append({"id": r["id"], "date": r["date"], "payee": r["payee"],
+                    "amount_cents": r["amount_cents"],
+                    "account": r["account"]})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def unpaired_movements(conn, limit=40, exclude=()):
     """Rows that read like a movement and have no other half anywhere.
 
     Money leaving for Apple Pay, Venmo, a loan or another person is a real
@@ -680,9 +727,13 @@ def unpaired_movements(conn, limit=40):
     working. They need the other treatment -- an off-budget account to send
     them to -- so they are named separately.
     """
-    words = ("transfer", "xfer", "zelle", "venmo", "apple pay", "cash app",
-             "to loan", "from loan", "withdrawal internet banking",
-             "deposit internet banking")
+    # What reads as a movement between two accounts you hold. Deliberately
+    # narrower than it was: the wallets and loan servicers are excluded
+    # above, because those are not going to pair and listing them here as
+    # unaccounted-for implies they might.
+    words = ("transfer", "xfer", "withdrawal internet banking",
+             "deposit internet banking", "to share", "from share",
+             "to checking", "from checking", "to savings", "from savings")
     rows = conn.execute(
         "SELECT t.id, t.date, t.amount_cents, t.payee, a.name account"
         " FROM transactions t JOIN accounts a ON a.id = t.account_id"
@@ -698,6 +749,8 @@ def unpaired_movements(conn, limit=40):
     for r in rows:
         text = (r["payee"] or "").lower()
         if not any(w in text for w in words):
+            continue
+        if goes_outside(r["payee"], exclude):
             continue
         # If anything anywhere could cancel it, it is not unpairable -- it is
         # merely unpaired, and the scans above are the right place for it.

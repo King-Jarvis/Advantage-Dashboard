@@ -411,3 +411,81 @@ def test_an_off_budget_account_can_receive_what_cannot_pair(conn, book):
     ledger.send_to_account(conn, tid, wallet)
     assert ledger.unpaired_movements(conn) == []
     assert len(ledger.transfers(conn)) == 1
+
+
+# ── what the scan must not try to pair ────────────────────────────────────
+TERMS = ["apple pay", "venmo", "loan"]
+
+
+def test_a_wallet_payment_is_never_offered_as_a_candidate(conn, book):
+    """Money to Apple Pay has its other half in no statement you will import.
+
+    Two equal and opposite amounts a few days apart is then a coincidence
+    wearing the shape of a transfer, and proposing it is worse than silence:
+    accepting it invents a movement and hides a real expense.
+    """
+    ledger.add_transaction(conn, book["checking"], "2026-01-02", -50_00,
+                           "Transfer to Apple Pay")
+    ledger.add_transaction(conn, book["savings"], "2026-01-03", 50_00,
+                           "Deposit Internet Banking Transfer")
+    assert len(ledger.transfer_candidates(conn)) == 1
+    assert ledger.transfer_candidates(conn, exclude=TERMS) == []
+
+
+def test_the_exclusion_applies_to_the_incoming_half_too(conn, book):
+    ledger.add_transaction(conn, book["checking"], "2026-01-02", -50_00,
+                           "Withdrawal Internet Banking Transfer")
+    ledger.add_transaction(conn, book["savings"], "2026-01-03", 50_00,
+                           "Transfer from Venmo")
+    assert ledger.transfer_candidates(conn, exclude=TERMS) == []
+
+
+def test_a_real_account_transfer_still_pairs(conn, book):
+    ledger.add_transaction(conn, book["checking"], "2026-01-02", -50_00,
+                           "Transfer To Share 0000")
+    ledger.add_transaction(conn, book["savings"], "2026-01-03", 50_00,
+                           "Transfer From Share 0000")
+    assert len(ledger.transfer_candidates(conn, exclude=TERMS)) == 1
+
+
+def test_the_wider_scan_honours_the_same_exclusions(conn, book):
+    ledger.add_transaction(conn, book["checking"], "2026-01-02", -50_00,
+                           "Transfer to Apple Pay")
+    ledger.add_transaction(conn, book["savings"], "2026-01-20", 50_00,
+                           "Deposit Internet Banking Transfer")
+    assert len(ledger.near_misses(conn)) == 1
+    assert ledger.near_misses(conn, exclude=TERMS) == []
+
+
+def test_excluded_rows_are_reported_not_hidden(conn, book):
+    """A scan that silently skips things is one you stop trusting."""
+    ledger.add_transaction(conn, book["checking"], "2026-01-02", -35_00,
+                           "Transfer to Apple Pay")
+    ledger.add_transaction(conn, book["checking"], "2026-01-05", -84_73,
+                           "Transfer To Loan 0001")
+    outside = ledger.outside_movements(conn, TERMS)
+    assert len(outside) == 2
+    assert {r["payee"] for r in outside} == {"Transfer to Apple Pay",
+                                            "Transfer To Loan 0001"}
+
+
+def test_an_excluded_row_is_not_also_called_unpaired(conn, book):
+    """It would be counted twice, as a problem and as a decision."""
+    ledger.add_transaction(conn, book["checking"], "2026-01-02", -35_00,
+                           "Transfer to Apple Pay")
+    assert ledger.unpaired_movements(conn, exclude=TERMS) == []
+    assert len(ledger.outside_movements(conn, TERMS)) == 1
+
+
+def test_terms_are_parsed_forgivingly(conn, book):
+    assert ledger.split_terms("Apple Pay, venmo ,, LOAN ") == [
+        "apple pay", "venmo", "loan"]
+    assert ledger.split_terms("") == []
+    assert ledger.split_terms(None) == []
+
+
+def test_no_exclusions_means_nothing_is_excluded(conn, book):
+    ledger.add_transaction(conn, book["checking"], "2026-01-02", -35_00,
+                           "Transfer to Apple Pay")
+    assert len(ledger.unpaired_movements(conn, exclude=[])) == 1
+    assert ledger.outside_movements(conn, []) == []

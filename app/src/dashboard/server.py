@@ -613,14 +613,21 @@ class Handler(BaseHTTPRequestHandler):
         """
         from . import ledger
         wide = "wide" in self.query()
+        # Money to a wallet or a loan servicer has its other half in a
+        # statement that will never be imported, so the scan leaves it alone
+        # rather than offering coincidences as candidates.
+        exclude = ledger.split_terms(settings.get(conn, "transfer_exclusions"))
         self.json_out({
             "transfers": ledger.transfers(conn),
-            "candidates": ledger.transfer_candidates(conn),
+            "candidates": ledger.transfer_candidates(conn, exclude=exclude),
             "window_days": ledger.TRANSFER_WINDOW_DAYS,
-            # Only on request: both are a full sweep of the ledger, and the
+            "exclusions": exclude,
+            # Only on request: each is a full sweep of the ledger, and the
             # panel opens on every visit to the import screen.
-            "near_misses": ledger.near_misses(conn) if wide else [],
-            "unpaired": ledger.unpaired_movements(conn) if wide else [],
+            "near_misses": ledger.near_misses(conn, exclude=exclude) if wide else [],
+            "unpaired": (ledger.unpaired_movements(conn, exclude=exclude)
+                         if wide else []),
+            "outside": ledger.outside_movements(conn, exclude) if wide else [],
             "scanned": wide,
         })
 
