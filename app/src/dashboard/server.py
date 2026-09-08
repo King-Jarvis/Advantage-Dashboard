@@ -1113,6 +1113,11 @@ class Handler(BaseHTTPRequestHandler):
         self.json_out({
             "month": month,
             "totals": stats.totals(conn, end_month=month),
+            # Which months these figures rest on, and which were left out.
+            # A recommendation drawn from three of your six months is a fine
+            # answer; presenting it as "your history" without saying so is
+            # how it becomes unarguable.
+            "coverage": stats.coverage_notes(conn, end_month=month),
             "suggestions": [{
                 "category_id": r["category_id"], "name": r["name"],
                 "group": r["group"], "kind": r["kind"],

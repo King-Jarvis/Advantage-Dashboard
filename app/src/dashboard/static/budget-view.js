@@ -16,7 +16,7 @@ import { el, keepingPlace, money, moneyEl, mount, parseMoney, svg }
 import { spendingChart } from "./chart.js";
 
 const state = {
-  month: null, data: null, suggestions: null, groups: null,
+  month: null, data: null, suggestions: null, coverage: null, groups: null,
   expanded: null, moveFrom: null, adding: false, error: "", splitting: null,
   organising: false,
 };
@@ -121,7 +121,50 @@ function header(onMonth, refresh) {
             + "what the history suggests." }),
           el("dt", { text: "\u2039 and \u203a" }),
           el("dd", { text: "Previous and next month. Budgets are per month; "
-            + "what you set in one does not follow you into the next." })))));
+            + "what you set in one does not follow you into the next." }))),
+      coverageNote()));
+}
+
+/* ── what the suggestions rest on ───────────────────────────────────────── */
+function coverageNote() {
+  const c = state.coverage;
+  if (!c) return null;
+
+  const span = c.used.length
+    ? (c.used.length === 1 ? c.used[0]
+       : `${c.used[0]} to ${c.used[c.used.length - 1]}`)
+    : "none";
+
+  // Not enough to say anything. Better to say that than to average over
+  // whatever happens to be there and present the result as your history.
+  if (!c.enough) {
+    return el("details", { class: "legend" },
+      el("summary", { text: `Not enough history yet — ${c.used.length} of `
+        + `${c.minimum} months needed` }),
+      el("div", { class: "node-body flush" },
+        el("p", { text: "Expected amounts need at least "
+          + `${c.minimum} complete months that cover the same accounts. `
+          + "Import more statements and they will appear." }),
+        droppedList(c)));
+  }
+
+  return el("details", { class: "legend" },
+    el("summary", { text: `Expected amounts come from ${c.used.length} month`
+      + `${c.used.length === 1 ? "" : "s"}: ${span}` }),
+    el("div", { class: "node-body flush" },
+      el("p", { text: "Only complete months covering the same accounts are "
+        + "averaged. A month missing half your statements is not a cheap "
+        + "month, and the one in progress is not a whole one." }),
+      droppedList(c)));
+}
+
+function droppedList(c) {
+  if (!c.dropped.length) return null;
+  const dl = el("dl", {});
+  for (const d of c.dropped) {
+    dl.append(el("dt", { text: d.month }), el("dd", { text: d.reason }));
+  }
+  return el("div", {}, el("p", { class: "label", text: "Left out" }), dl);
 }
 
 /* ── adding a category ──────────────────────────────────────────────────── */
@@ -550,6 +593,10 @@ export async function budgetView(container, month, onMonth) {
 
   render();
   get(`/api/view/suggestions?month=${encodeURIComponent(month)}`)
-    .then((s) => { state.suggestions = s.suggestions; render(); })
+    .then((s) => {
+      state.suggestions = s.suggestions;
+      state.coverage = s.coverage || null;
+      render();
+    })
     .catch(() => { /* the budget stands without them */ });
 }

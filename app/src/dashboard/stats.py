@@ -53,26 +53,99 @@ def this_month():
 
 
 # ── coverage ──────────────────────────────────────────────────────────────
-def covered_months(conn, end_month=None, window=WINDOW_MONTHS):
-    """Months in the window that actually have data behind them.
+def _coverage_by_month(conn):
+    """{month: set of on-budget accounts with a statement for it}.
 
-    Consults month_coverage, which the importer maintains. A month absent
-    from it is a month we have no statement for -- not a month in which
-    nothing was spent.
+    Off-budget accounts are excluded here for the same reason their spending
+    is: they are outside the budget, so whether their statement was imported
+    says nothing about whether a month is comparable.
+    """
+    rows = conn.execute(
+        "SELECT c.month, c.account_id FROM month_coverage c"
+        " JOIN accounts a ON a.id = c.account_id"
+        " WHERE a.on_budget=1").fetchall()
+    out = {}
+    for r in rows:
+        out.setdefault(r["month"], set()).add(r["account_id"])
+    return out
+
+
+def covered_months(conn, end_month=None, window=WINDOW_MONTHS):
+    """Months in the window that can honestly be averaged together.
+
+    Three tests, not one. "Has data behind it" was the only one for a long
+    time, and the two missing ones were each worth about half the budget.
+
+    **It has a statement.** A month absent from month_coverage is a month we
+    have no statement for -- not a month in which nothing was spent.
+
+    **It has finished.** The month in progress holds however many days have
+    elapsed. Averaged in as though it were a whole one it drags every figure
+    down, and worst for whatever is billed late in the month. On the seventh
+    it is a quarter of a data point pretending to be a whole one.
+
+    **It saw the same accounts as the others.** Importing one statement for
+    April and all six for July does not mean April was cheap; it means April
+    is a different-sized universe. Mixing them understates every category by
+    roughly the ratio of the two, which looks exactly like a frugal spring.
+
+    The reference set is the accounts covering at least half the finished
+    months, rather than every account that has ever been covered. Otherwise
+    connecting a new account today would disqualify all of your history until
+    you went back and imported its statements too.
     """
     end_month = end_month or this_month()
     wanted = set(month_range(end_month, window))
-    rows = conn.execute(
-        "SELECT DISTINCT month FROM month_coverage ORDER BY month").fetchall()
-    have = {r["month"] for r in rows}
-    if not have:
+    by_month = _coverage_by_month(conn)
+
+    if not by_month:
         # No import has happened. Fall back to months the ledger itself has,
         # so a hand-entered book still gets recommendations.
         rows = conn.execute(
             "SELECT DISTINCT substr(date,1,7) m FROM transactions"
             " WHERE deleted=0").fetchall()
-        have = {r["m"] for r in rows}
-    return sorted(wanted & have)
+        return sorted(wanted & {r["m"] for r in rows} - {this_month()})
+
+    finished = sorted((wanted & set(by_month)) - {this_month()})
+    if not finished:
+        return []
+
+    counts = {}
+    for m in finished:
+        for acct in by_month[m]:
+            counts[acct] = counts.get(acct, 0) + 1
+    need = (len(finished) + 1) // 2
+    reference = {a for a, n in counts.items() if n >= need}
+
+    return [m for m in finished if reference <= by_month[m]]
+
+
+def coverage_notes(conn, end_month=None, window=WINDOW_MONTHS):
+    """Which months were used, which were dropped, and why.
+
+    The engine declining to average over a month is the right call, but it is
+    only defensible if it says so. Silently using three of six months and
+    presenting the result as "your history" is how a recommendation becomes
+    unarguable.
+    """
+    end_month = end_month or this_month()
+    wanted = set(month_range(end_month, window))
+    by_month = _coverage_by_month(conn)
+    used = covered_months(conn, end_month, window)
+    n_accounts = conn.execute(
+        "SELECT COUNT(*) n FROM accounts WHERE on_budget=1").fetchone()["n"]
+
+    dropped = []
+    for m in sorted((wanted & set(by_month)) - set(used)):
+        if m == this_month():
+            why = "still in progress"
+        else:
+            why = ("only %d of %d accounts imported"
+                   % (len(by_month[m]), n_accounts))
+        dropped.append({"month": m, "reason": why})
+
+    return {"used": used, "dropped": dropped,
+            "enough": len(used) >= MIN_MONTHS, "minimum": MIN_MONTHS}
 
 
 def monthly_spend(conn, category_id, months):
