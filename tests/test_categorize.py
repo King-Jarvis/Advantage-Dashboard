@@ -177,7 +177,7 @@ def test_every_spelling_of_a_merchant_gets_the_answer(conn, book, monkeypatch):
     other twenty-one rows for the same shop stayed uncategorised."""
     asked = []
 
-    def fake(payees, names, model=None, timeout=None):
+    def fake(payees, names, model=None, timeout=None, **kw):
         asked.append(list(payees))
         return {p: "Groceries" for p in payees}
 
@@ -192,7 +192,7 @@ def test_a_merchant_is_asked_about_once(conn, book, monkeypatch):
     """Twenty-two rows is one question. This is the whole saving."""
     asked = []
 
-    def fake(payees, names, model=None, timeout=None):
+    def fake(payees, names, model=None, timeout=None, **kw):
         asked.append(list(payees))
         return {}
 
@@ -260,7 +260,7 @@ def test_every_merchant_is_asked_about_not_just_the_first_forty(conn, book,
     model declining to answer."""
     sent = []
 
-    def fake(payees, names, model=None, timeout=None):
+    def fake(payees, names, model=None, timeout=None, **kw):
         sent.extend(payees)
         return {p: "Groceries" for p in payees}
 
@@ -275,7 +275,7 @@ def test_every_merchant_is_asked_about_not_just_the_first_forty(conn, book,
 def test_the_calls_are_chunked(conn, book, monkeypatch):
     calls = []
 
-    def fake(payees, names, model=None, timeout=None):
+    def fake(payees, names, model=None, timeout=None, **kw):
         calls.append(len(payees))
         return {}
 
@@ -366,3 +366,135 @@ def test_a_short_digit_run_still_separates_merchants(conn, book):
     from dashboard.text import norm_payee
     assert norm_payee("AMAZON.COM*7777") == "amazon com"
     assert norm_payee("AMAZON.COM*99") == "amazon com 99"
+
+
+# ── whose decision was it ─────────────────────────────────────────────────
+def filed_by(conn, book, payee, cat, source, date="2026-08-01"):
+    return ledger.add_transaction(conn, book["acct"], date, -1000, payee,
+                                  book[cat], category_source=source)
+
+
+def test_one_correction_beats_the_guesses_it_corrected(conn, book):
+    """The whole point. It used to lose the headcount 19 to 1.
+
+    Twenty rows filed automatically into the wrong category, one fixed by
+    hand: the fix has to win, or the wrong answer keeps being suggested and
+    keeps adding to its own majority.
+    """
+    for _ in range(20):
+        filed_by(conn, book, "AMAZON PRIME 8821", "groceries", "model")
+    fixed = filed_by(conn, book, "AMAZON PRIME 8821", "groceries", "model")
+    ledger.update_transaction(conn, fixed, category_id=book["rent"])
+
+    cid, why = categorize.from_history(conn, "amazon prime")
+    assert cid == book["rent"]
+    assert why == categorize.WHY_YOU
+
+
+def test_without_a_correction_it_still_follows_the_majority(conn, book):
+    for _ in range(3):
+        filed_by(conn, book, "SHELL", "fuel", "model")
+    filed_by(conn, book, "SHELL", "groceries", "model")
+    cid, why = categorize.from_history(conn, "shell")
+    assert cid == book["fuel"]
+    assert why == categorize.WHY_HISTORY
+
+
+def test_the_most_recent_correction_wins(conn, book):
+    """Changing your mind has to be the last word, not one vote of two."""
+    a = filed_by(conn, book, "PRET", "groceries", "model")
+    b = filed_by(conn, book, "PRET", "groceries", "model")
+    ledger.update_transaction(conn, a, category_id=book["fuel"])
+    ledger.update_transaction(conn, b, category_id=book["rent"])
+    # Corrections minutes apart, which is what the timestamps see in practice.
+    conn.execute("UPDATE transactions SET updated_at='2026-08-01T10:00:00'"
+                 " WHERE id=?", (a,))
+    conn.execute("UPDATE transactions SET updated_at='2026-08-01T10:05:00'"
+                 " WHERE id=?", (b,))
+    conn.commit()
+    assert categorize.from_history(conn, "pret")[0] == book["rent"]
+
+    conn.execute("UPDATE transactions SET updated_at='2026-08-01T10:09:00'"
+                 " WHERE id=?", (a,))
+    conn.commit()
+    assert categorize.from_history(conn, "pret")[0] == book["fuel"]
+
+
+def test_editing_a_category_records_it_as_yours(conn, book):
+    tid = filed_by(conn, book, "TESCO", "groceries", "model")
+    ledger.update_transaction(conn, tid, category_id=book["fuel"])
+    row = conn.execute("SELECT category_source FROM transactions WHERE id=?",
+                       (tid,)).fetchone()
+    assert row["category_source"] == "you"
+
+
+def test_clearing_a_category_clears_who_chose_it(conn, book):
+    tid = filed_by(conn, book, "TESCO", "groceries", "you")
+    ledger.update_transaction(conn, tid, category_id=None)
+    row = conn.execute("SELECT category_source FROM transactions WHERE id=?",
+                       (tid,)).fetchone()
+    assert row["category_source"] == ""
+
+
+def test_filing_a_whole_merchant_records_it_as_yours(conn, book):
+    filed_by(conn, book, "CO-OP FOOD 9911", "groceries", "model")
+    conn.execute("UPDATE transactions SET category_id=NULL, category_source=''")
+    conn.commit()
+    # Four-digit runs are stripped by norm_payee; three-digit ones are not.
+    assert ledger.categorise_payee(conn, "co op food", book["fuel"]) == 1
+    row = conn.execute("SELECT category_id, category_source FROM transactions"
+                       " WHERE payee_norm='co op food'").fetchone()
+    assert row["category_id"] == book["fuel"]
+    assert row["category_source"] == "you"
+
+
+def test_the_classifier_records_its_own_answers_as_its_own(conn, book):
+    seen(conn, book, "TESCO STORES 3299", "groceries")
+    ledger.add_transaction(conn, book["acct"], "2026-08-02", -500,
+                           "TESCO STORES 7781")
+    categorize.apply_everywhere(conn, use_model=False)
+    row = conn.execute("SELECT category_source FROM transactions"
+                       " WHERE payee='TESCO STORES 7781'").fetchone()
+    assert row["category_source"] in ("history", "similar")
+
+
+# ── the examples handed to the model ──────────────────────────────────────
+def test_your_decisions_are_offered_to_the_model_first(conn, book):
+    """A guess must never come back as evidence for itself."""
+    for i in range(9):
+        filed_by(conn, book, "GUESSED %d" % i, "groceries", "model")
+    filed_by(conn, book, "YOURS", "fuel", "you")
+
+    got = categorize.exemplars(conn, limit=3)
+    assert got[0] == ("yours", "Fuel"), got
+
+
+def test_no_category_can_crowd_out_the_others(conn, book):
+    for i in range(10):
+        filed_by(conn, book, "SHOP %d" % i, "groceries", "you")
+    filed_by(conn, book, "GARAGE", "fuel", "you")
+
+    got = categorize.exemplars(conn, limit=40, per_category=3)
+    assert sum(1 for _, name in got if name == "Groceries") == 3
+    assert ("garage", "Fuel") in got
+
+
+def test_examples_reach_the_model(conn, book):
+    filed_by(conn, book, "PRET A MANGER", "groceries", "you")
+    seen_examples = {}
+
+    def fake(payees, names, model=None, timeout=None, examples=(), **kw):
+        seen_examples["v"] = list(examples)
+        return {}
+
+    categorize._ask_model, real = fake, categorize._ask_model
+    try:
+        categorize.suggest(conn, ["SOME NEW CAFE"], use_model=True)
+    finally:
+        categorize._ask_model = real
+    assert ("pret a manger", "Groceries") in seen_examples["v"]
+
+
+def test_an_empty_ledger_sends_no_examples_block(conn, book):
+    assert categorize.exemplars(conn) == []
+    assert categorize._examples_block([]) == "\n"

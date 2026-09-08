@@ -41,11 +41,20 @@ writes the accompanying sentence. A budget you cannot reproduce or audit is
 worse than no budget.
 
 **Names only.** Two features can call a model, both off by default and both
-enabled separately in Settings. Filing an unfamiliar merchant sends normalised
-merchant names and your category names. The savings plan sends category names
-alone, to judge which are contractual. Neither sends amounts, dates, balances,
-account numbers or message contents, and neither lets the model produce a
-number: it returns a label, and the arithmetic is done here.
+enabled separately in Settings.
+
+Filing an unfamiliar merchant sends normalised merchant names, your category
+names, and up to forty worked examples from your own ledger in the form
+`merchant -> category`. The examples are what let it tell a work canteen from
+a night out when both are just restaurants. They are drawn from filings you
+made by hand in preference to the model's own past output, so a guess is
+never fed back as evidence for itself.
+
+The savings plan sends category names alone, to judge which are contractual.
+
+Neither sends amounts, dates, balances, account numbers or message contents,
+and neither lets the model produce a number: it returns a label, and the
+arithmetic is done here.
 
 ## Known limitations
 

@@ -76,8 +76,11 @@ amounts, so they are not sent: "Rent" is contractual whether it is £200 or £2,
 It is off unless you enable it in Settings, and the answer is cached on each category, so
 it runs once per category ever. Pressing the button again with nothing new costs nothing.
 
-Merchant categorisation is a separate feature with the same shape: normalised merchant
-names only, off by default.
+Merchant categorisation is a separate feature with the same shape, and off by default.
+It sends normalised merchant names plus up to forty `merchant -> category` examples from
+your own history, so the model can follow your distinctions instead of guessing at them —
+a canteen at work and a takeaway are both restaurants, and only your own filings say
+which is which. Still no amounts, dates or balances.
 
 ## Confidence
 

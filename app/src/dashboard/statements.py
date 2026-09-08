@@ -457,10 +457,17 @@ def batch_rows(conn, batch_id):
 
 
 def set_row(conn, row_id, **fields):
-    allowed = {"excluded", "category_id", "payee", "notes", "amount_cents", "date"}
+    allowed = {"excluded", "category_id", "payee", "notes", "amount_cents",
+               "date", "category_source"}
     bad = set(fields) - allowed
     if bad:
         raise ValueError("cannot set: " + ", ".join(sorted(bad)))
+    # Choosing a category while reviewing a statement is a decision, and it
+    # has to survive the commit as one -- this is where most filing actually
+    # happens, so treating it as a machine guess would waste the best
+    # evidence the classifier ever gets.
+    if "category_id" in fields and "category_source" not in fields:
+        fields["category_source"] = "you" if fields["category_id"] else ""
     sets = ", ".join("%s=?" % k for k in fields)
     values = [int(v) if k == "excluded" else v for k, v in fields.items()]
     if "payee" in fields:
@@ -496,6 +503,7 @@ def commit_batch(conn, batch_id, remember_as=""):
             txn = ledger.add_transaction(
                 conn, b["account_id"], row["date"], int(row["amount_cents"]),
                 payee=row["payee"], category_id=row["category_id"],
+                category_source=row["category_source"],
                 notes=row["notes"], imported_id=row["dedup_key"] or None,
                 source="import", commit=False)
         except Exception:

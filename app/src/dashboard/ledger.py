@@ -161,17 +161,25 @@ def list_categories(conn, include_hidden=False):
 # ═══════════════════════════════════════════════════════════════════════════
 def add_transaction(conn, account_id, date, amount_cents, payee="",
                     category_id=None, notes="", cleared=False,
-                    imported_id=None, source="manual", commit=True):
-    """A plain transaction. Negative amount means money out."""
+                    imported_id=None, source="manual", commit=True,
+                    category_source=""):
+    """A plain transaction. Negative amount means money out.
+
+    `category_source` records who chose the category, when one is given: a
+    committed import carries across whichever step suggested it, so a guess
+    never arrives looking like a decision.
+    """
     if not isinstance(amount_cents, int):
         raise TypeError("amount_cents must be int (cents), got %r" % type(amount_cents))
     tid = new_id()
     conn.execute(
         "INSERT INTO transactions (id, account_id, date, amount_cents, payee,"
-        " payee_norm, notes, category_id, cleared, imported_id, source,"
-        " created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " payee_norm, notes, category_id, category_source, cleared,"
+        " imported_id, source, created_at, updated_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (tid, account_id, date, amount_cents, payee, _norm_payee(payee), notes,
-         category_id, 1 if cleared else 0, imported_id, source, _now(), _now()))
+         category_id, category_source if category_id else "",
+         1 if cleared else 0, imported_id, source, _now(), _now()))
     _audit(conn, "create", "transaction", tid, "%s %d" % (date, amount_cents))
     if commit:
         conn.commit()
@@ -364,10 +372,17 @@ def update_transaction(conn, txn_id, **fields):
     category.
     """
     allowed = {"date", "amount_cents", "payee", "notes", "category_id",
-               "cleared", "reconciled", "account_id"}
+               "cleared", "reconciled", "account_id", "category_source"}
     bad = set(fields) - allowed
     if bad:
         raise ValueError("cannot update: %s" % ", ".join(sorted(bad)))
+
+    # A category set through this function is a decision someone made, unless
+    # the caller says which machine step made it. Recording that is what lets
+    # a correction outrank the twenty guesses it corrected, instead of being
+    # one more vote among them.
+    if "category_id" in fields and "category_source" not in fields:
+        fields["category_source"] = "you" if fields["category_id"] else ""
 
     row = conn.execute("SELECT * FROM transactions WHERE id=? AND deleted=0",
                        (txn_id,)).fetchone()
@@ -862,7 +877,8 @@ def payee_groups(conn, filed=False, limit=300):
     return sorted(groups.values(), key=lambda g: -abs(g["total_cents"]))[:limit]
 
 
-def categorise_payee(conn, payee_key, category_id, overwrite=False):
+def categorise_payee(conn, payee_key, category_id, overwrite=False,
+                     source="you"):
     """File every row for one merchant at once.
 
     By default only rows without a category are touched: clearing a backlog
@@ -883,8 +899,9 @@ def categorise_payee(conn, payee_key, category_id, overwrite=False):
     for r in rows:
         if norm_payee(r["payee"] or "") != payee_key:
             continue
-        conn.execute("UPDATE transactions SET category_id=? WHERE id=?",
-                     (category_id, r["id"]))
+        conn.execute(
+            "UPDATE transactions SET category_id=?, category_source=?"
+            " WHERE id=?", (category_id, source, r["id"]))
         n += 1
     if n:
         _audit(conn, "update", "transaction", payee_key,

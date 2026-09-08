@@ -468,7 +468,8 @@ export async function importView(container, { onDone } = {}) {
         // merchant is that a hundred rows is not a hundred questions.
         const bits = [`${r.changed} of ${r.rows} rows`,
                       `${r.merchants} distinct merchants`];
-        if (r.history) bits.push(`${r.history} from what you set before`);
+        if (r.yours) bits.push(`${r.yours} from your own corrections`);
+        if (r.history) bits.push(`${r.history} from how they were filed before`);
         if (r.similar) bits.push(`${r.similar} by resemblance`);
         if (r.model) {
           bits.push(`${r.model} asked in ${r.model_calls} request`
