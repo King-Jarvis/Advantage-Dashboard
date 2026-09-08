@@ -47,6 +47,12 @@ jobs:
         # silently renders nothing, with no trace anywhere the server sees.
         run: ./scripts/check-js-syntax.sh
 
+      - name: front-end behaviour
+        # Parsing is not correctness. These run in a zone that is not UTC on
+        # purpose: reading a naive UTC timestamp as local gives the identical
+        # answer in UTC, so a suite that runs there cannot see the bug.
+        run: ./scripts/check-js-behaviour.sh
+
       - name: nothing sensitive is tracked
         run: |
           # A .gitignore rule only helps if it was already there when the file
