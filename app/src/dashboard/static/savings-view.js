@@ -89,10 +89,16 @@ function summary(refresh) {
 function unclassifiedNote() {
   const n = (state.plan.unclassified || []).length;
   if (!n) return null;
-  return el("p", { class: "label",
-    text: `${n} categor${n === 1 ? "y has" : "ies have"} not been sorted yet, `
-      + "so they are treated cautiously. Press Sort my categories, or set "
-      + "them yourself below." });
+  // Not "treated cautiously": an unsorted category is trimmed as "Some
+  // room", which means a rent or a loan payment is being cut until someone
+  // says otherwise. Saying so plainly is the difference between a plan that
+  // is wrong and a plan that is wrong and hiding it.
+  const subject = n === 1 ? "1 category has" : `${n} categories have`;
+  const pronoun = n === 1 ? "it is" : "they are";
+  return el("div", { class: "error" },
+    el("span", { text: `${subject} not been sorted yet, so ${pronoun} being `
+      + "trimmed as \u201cSome room\u201d \u2014 including anything fixed. "
+      + "Sort them before you trust these figures." }));
 }
 
 /* ── one category ───────────────────────────────────────────────────────── */
