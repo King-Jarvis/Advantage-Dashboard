@@ -308,3 +308,61 @@ def test_the_token_budget_scales_with_the_batch(monkeypatch):
     small = seen["max_tokens"]
     categorize._ask_model(["m%d" % i for i in range(40)], ["Groceries"])
     assert seen["max_tokens"] > small
+
+
+# ── what the counters report ──────────────────────────────────────────────
+def test_a_resemblance_match_is_counted_as_resemblance(conn, book):
+    """It was counted as history, so the free/paid split was wrong.
+
+    plan() looked for the word "similar" in the displayed reason. from_similar
+    has never said "similar" -- it says "looks like X" -- so the resemblance
+    counter read zero however many matched, and the interface never once
+    showed the "by resemblance" line it has code for.
+    """
+    seen(conn, book, "Waitrose Bridge Street", "groceries")
+    _, counts = categorize.plan(conn, ["Waitrose Bridge"], use_model=False)
+    assert counts["similar"] == 1
+    assert counts["history"] == 0
+
+
+def test_an_exact_repeat_is_counted_as_history(conn, book):
+    seen(conn, book, "TESCO STORES 3299", "groceries")
+    _, counts = categorize.plan(conn, ["TESCO STORES 4102"], use_model=False)
+    assert counts["history"] == 1
+    assert counts["similar"] == 0
+
+
+def test_the_counters_account_for_every_merchant(conn, book):
+    seen(conn, book, "TESCO STORES 3299", "groceries")
+    seen(conn, book, "Waitrose Bridge Street", "groceries")
+    payees = ["TESCO STORES 4102", "Waitrose Bridge", "Blackwells Bookshop"]
+    _, counts = categorize.plan(conn, payees, use_model=False)
+    assert counts["merchants"] == 3
+    assert (counts["history"] + counts["similar"] + counts["model"]
+            + counts["unresolved"]) == counts["merchants"]
+
+
+def test_duplicate_spellings_are_one_decision_not_many(conn, book):
+    """The whole point of grouping by merchant: 22 rows, one question.
+
+    Grouping is by the normalised name, which strips digit runs of four or
+    more -- the card fragments and store ids banks decorate a merchant with.
+    It is not fuzzy: "AMAZON MKTPL" is a different merchant from "AMAZON.COM"
+    at this stage, and only step two's resemblance test can join them.
+    """
+    seen(conn, book, "Amazon.com 0001", "groceries")
+    payees = ["AMAZON.COM*1234", "Amazon.com 5512", "AMAZON.COM*7777"]
+    mapping, counts = categorize.plan(conn, payees, use_model=False)
+    assert counts["rows"] == 3
+    assert counts["merchants"] == 1, "three spellings, one merchant"
+    assert counts["history"] == 1, "and one decision, not three"
+    # The single answer is applied to every spelling, not just the first.
+    assert len(mapping) == 3
+    assert {v[0] for v in mapping.values()} == {book["groceries"]}
+
+
+def test_a_short_digit_run_still_separates_merchants(conn, book):
+    """Only runs of four or more are stripped, so 99 is part of the name."""
+    from dashboard.text import norm_payee
+    assert norm_payee("AMAZON.COM*7777") == "amazon com"
+    assert norm_payee("AMAZON.COM*99") == "amazon com 99"

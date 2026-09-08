@@ -30,6 +30,22 @@ API_VERSION = "2023-06-01"
 TIMEOUT = 20
 MAX_PAYEES_PER_CALL = 40
 
+# The three ways a suggestion can be reached, written once.
+#
+# plan() used to bucket these by searching the displayed reason for the word
+# "similar" -- which from_similar has never said; it says "looks like X". So
+# every resemblance match was counted as history, the "by resemblance" line
+# never appeared, and the free/paid split the counters exist to show was
+# quietly wrong. Prose is for reading; grouping needs something stable.
+WHY_HISTORY = "you categorised this payee before"
+WHY_MODEL = "suggested by model"
+SIMILAR_PREFIX = "looks like "
+
+
+def why_similar(payee_norm):
+    return "%s%s" % (SIMILAR_PREFIX, payee_norm)
+
+
 # Words too common to identify a merchant on their own.
 _STOP = {"the", "and", "ltd", "limited", "inc", "llc", "co", "uk", "com",
          "store", "shop", "services", "service", "group", "online"}
@@ -50,7 +66,7 @@ def from_history(conn, payee_norm):
         " GROUP BY category_id ORDER BY n DESC, MAX(date) DESC LIMIT 1",
         (payee_norm,)).fetchone()
     if row:
-        return row["category_id"], "you categorised this payee before"
+        return row["category_id"], WHY_HISTORY
     return None, ""
 
 
@@ -79,7 +95,7 @@ def from_similar(conn, payee_norm):
         if score > best_score:
             best, best_score = r, score
     if best and best_score >= 0.5:
-        return best["category_id"], "looks like %s" % best["payee_norm"]
+        return best["category_id"], why_similar(best["payee_norm"])
     return None, ""
 
 
@@ -221,7 +237,7 @@ def suggest(conn, payees, use_model=None):
             if not cid:
                 continue
             for raw in by_norm.get(norm, ()):
-                out[raw] = (cid, "suggested by model")
+                out[raw] = (cid, WHY_MODEL)
 
     return out
 
@@ -241,11 +257,12 @@ def plan(conn, payees, use_model=None):
     counts = {"history": 0, "similar": 0, "model": 0, "unresolved": 0}
     for raws in by_norm.values():
         hit = mapping.get(raws[0])
+        why = (hit[1] if hit else "") or ""
         if not hit:
             counts["unresolved"] += 1
-        elif hit[1] == "suggested by model":
+        elif why == WHY_MODEL:
             counts["model"] += 1
-        elif "similar" in (hit[1] or ""):
+        elif why.startswith(SIMILAR_PREFIX):
             counts["similar"] += 1
         else:
             counts["history"] += 1
