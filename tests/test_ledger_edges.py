@@ -489,3 +489,29 @@ def test_no_exclusions_means_nothing_is_excluded(conn, book):
                            "Transfer to Apple Pay")
     assert len(ledger.unpaired_movements(conn, exclude=[])) == 1
     assert ledger.outside_movements(conn, []) == []
+
+
+def test_an_exclusion_is_found_in_the_memo_the_bank_did_not_truncate(conn, book):
+    """The name is cut at 32 characters; the word that matters is past it.
+
+    "Withdrawal Internet Banking Tran" says nothing about where the money
+    went. Its memo says "...Transfer To Loan 0004", and matching only the
+    name left a loan payment sitting in the scan as though it might pair.
+    """
+    ledger.add_transaction(
+        conn, book["checking"], "2026-07-01", -385_43,
+        "Withdrawal Internet Banking Tran",
+        notes="Withdrawal Internet Banking Transfer To Loan 0004")
+    assert len(ledger.unpaired_movements(conn, exclude=[])) == 1
+    assert ledger.unpaired_movements(conn, exclude=TERMS) == []
+    assert len(ledger.outside_movements(conn, TERMS)) == 1
+
+
+def test_a_memo_exclusion_also_keeps_it_out_of_pairing(conn, book):
+    ledger.add_transaction(
+        conn, book["checking"], "2026-07-01", -385_43, "Withdrawal Internet",
+        notes="Transfer To Loan 0004")
+    ledger.add_transaction(conn, book["savings"], "2026-07-02", 385_43,
+                           "Deposit Internet Banking")
+    assert len(ledger.transfer_candidates(conn)) == 1
+    assert ledger.transfer_candidates(conn, exclude=TERMS) == []

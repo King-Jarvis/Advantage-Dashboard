@@ -28,6 +28,13 @@ FIXED_CV = 0.08
 # hides until it arrives.
 SINKING_MAX_ACTIVE = 3
 
+# How fast older months stop counting towards what next month will cost.
+# Three months, so a month a quarter old carries half the weight of the one
+# just gone. Slow enough that one heavy month does not become the forecast,
+# fast enough that a genuine change in habit shows up while it is still
+# useful to know.
+RECENCY_HALF_LIFE = 3.0
+
 
 def month_key(d):
     return d[:7]
@@ -169,6 +176,34 @@ def monthly_spend(conn, category_id, months):
 
 
 # ── summary statistics ────────────────────────────────────────────────────
+def recency_weighted(months, spend):
+    """What next month looks like, given that recent months count for more.
+
+    Distinct from the trimmed mean on purpose, and the distinction is the
+    point. The trimmed mean answers "what does this normally cost", which is
+    the right basis for a target you mean to hold yourself to -- it is stable,
+    and it ignores the extremes rather than chasing them.
+
+    This answers a different question: what is about to happen if nothing
+    changes. Spending that has been climbing for three months is not going to
+    average itself out next month, and a forecast that says so is no use for
+    deciding what to do about it.
+
+    Weights decay by half every RECENCY_HALF_LIFE months. A weighted mean of
+    the values always lands between the smallest and largest of them, so this
+    cannot project a month that has never happened.
+    """
+    if not months:
+        return 0
+    n = len(months)
+    total = weight = 0.0
+    for i, m in enumerate(months):          # oldest first
+        w = 0.5 ** ((n - 1 - i) / RECENCY_HALF_LIFE)
+        total += spend.get(m, 0) * w
+        weight += w
+    return round(total / weight) if weight else 0
+
+
 def trimmed_mean(values, pct=TRIM_PCT):
     """Mean with the extremes dropped.
 
@@ -295,6 +330,11 @@ def analyse(conn, category_id, end_month=None, window=WINDOW_MONTHS):
         "trend_pct": trend_pct(values),
         "median_cents": int(statistics.median(values)) if values else 0,
         "trimmed_mean_cents": trimmed_mean(values),
+        # What next month costs if nothing changes, as distinct from what
+        # this normally costs. The two used to be the same number wearing
+        # two labels, which made the chart's estimate and its recommendation
+        # sit on top of each other and say nothing to each other.
+        "estimate_cents": recency_weighted(months, spend),
         "p25_cents": percentile(values, 25),
         "p75_cents": percentile(values, 75),
         "mad_cents": mad(values),
@@ -307,12 +347,16 @@ def analyse(conn, category_id, end_month=None, window=WINDOW_MONTHS):
     }
 
     if kind == "insufficient":
+        # It declines to recommend below MIN_MONTHS; forecasting from the
+        # same evidence would be the same guess wearing a different label.
+        out["estimate_cents"] = 0
         out["basis"] = ("only %d covered month%s; needs at least %d"
                         % (len(months), "" if len(months) == 1 else "s",
                            MIN_MONTHS))
         return out
 
     if kind == "unused":
+        out["estimate_cents"] = 0
         # No evidence, so no opinion. Asserting zero would read as "budget
         # nothing here", which is wrong for a savings goal that has simply
         # not been drawn on yet -- and the engine cannot tell a goal from a
@@ -325,6 +369,11 @@ def analyse(conn, category_id, end_month=None, window=WINDOW_MONTHS):
     if kind == "sinking":
         total = sum(active)
         per_month = round(total / max(1, len(months)))
+        # A recency weighting over eleven zeroes and one large month forecasts
+        # whichever it saw last, which is wrong in both directions. The
+        # expected cost of a month is the share, and that is the honest
+        # forecast even though no single month will look like it.
+        out["estimate_cents"] = per_month
         out["suggested_cents"] = per_month
         out["low_cents"] = per_month
         out["high_cents"] = per_month

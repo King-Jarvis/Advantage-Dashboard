@@ -407,3 +407,82 @@ def test_coverage_notes_admit_when_there_is_not_enough(conn, book):
     notes = stats.coverage_notes(conn, end_month="2025-08")
     assert notes["enough"] is False
     assert notes["minimum"] == stats.MIN_MONTHS
+
+
+# ── what next month costs, as distinct from what this normally costs ──────
+def history(conn, book, cat, amounts, end="2025-08"):
+    """Covered months ending at `end`, oldest amount first."""
+    ms = stats.month_range(end, len(amounts))
+    cover(conn, book, ms)
+    for m, a in zip(ms, amounts, strict=True):
+        if a:
+            spend(conn, book, cat, m, a)
+    return ms
+
+
+def test_a_rising_category_is_forecast_above_its_average(conn, book):
+    """The two figures answer different questions and must be free to differ.
+
+    Spending that has climbed for three months will not average itself out
+    next month, and a forecast that says it will is no use for deciding what
+    to do about it.
+    """
+    ms = history(conn, book, "groceries", [200, 400, 900])
+    a = stats.analyse(conn, book["groceries"], end_month=ms[-1])
+    assert a["estimate_cents"] > a["trimmed_mean_cents"]
+
+
+def test_a_falling_category_is_forecast_below_its_average(conn, book):
+    ms = history(conn, book, "groceries", [900, 400, 200])
+    a = stats.analyse(conn, book["groceries"], end_month=ms[-1])
+    assert a["estimate_cents"] < a["trimmed_mean_cents"]
+
+
+def test_a_steady_category_forecasts_what_it_always_was(conn, book):
+    ms = history(conn, book, "groceries", [400, 400, 400])
+    a = stats.analyse(conn, book["groceries"], end_month=ms[-1])
+    assert a["estimate_cents"] == 400_00
+
+
+def test_a_forecast_is_never_a_month_that_never_happened(conn, book):
+    """A weighted mean lands inside its own values. One wild month must not
+    project a wilder one."""
+    ms = history(conn, book, "groceries", [100, 100, 5000])
+    a = stats.analyse(conn, book["groceries"], end_month=ms[-1])
+    lo = min(a["spend_by_month"].values())
+    hi = max(a["spend_by_month"].values())
+    assert lo <= a["estimate_cents"] <= hi
+
+
+def test_recent_months_count_for_more_but_not_for_everything(conn, book):
+    ms = history(conn, book, "groceries", [0, 0, 900])
+    a = stats.analyse(conn, book["groceries"], end_month=ms[-1])
+    # Not 900: two quiet months still count for something.
+    assert a["estimate_cents"] < 900_00
+    assert a["estimate_cents"] > 300_00
+
+
+def test_an_annual_bill_forecasts_its_monthly_share(conn, book):
+    """Weighting recency over eleven zeroes and one big month forecasts
+    whichever it happened to see last, which is wrong both ways."""
+    ms = stats.month_range("2025-12", 12)
+    cover(conn, book, ms)
+    spend(conn, book, "insurance", ms[3], 600)
+    a = stats.analyse(conn, book["insurance"], end_month="2025-12")
+    assert a["kind"] == "sinking"
+    assert a["estimate_cents"] == 50_00
+
+
+def test_a_category_with_too_little_history_forecasts_nothing(conn, book):
+    history(conn, book, "groceries", [400, 400])
+    a = stats.analyse(conn, book["groceries"], end_month="2025-08")
+    assert a["kind"] == "insufficient"
+    assert a["estimate_cents"] == 0
+
+
+def test_the_weighting_is_stable_under_reordering(conn, book):
+    """It must weigh by date, not by whatever order rows came back in."""
+    ms = history(conn, book, "groceries", [100, 200, 300])
+    a = stats.analyse(conn, book["groceries"], end_month=ms[-1])
+    assert stats.recency_weighted(a["months"], a["spend_by_month"]) \
+        == stats.recency_weighted(list(a["months"]), dict(a["spend_by_month"]))

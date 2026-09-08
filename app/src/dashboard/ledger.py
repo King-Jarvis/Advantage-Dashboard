@@ -568,7 +568,7 @@ def split_terms(text):
     return [t.strip().lower() for t in (text or "").split(",") if t.strip()]
 
 
-def goes_outside(payee, terms):
+def goes_outside(payee, terms, description=""):
     """Is this money leaving for somewhere you hold no account?
 
     Apple Pay, Venmo, a loan servicer. The second half of such a movement is
@@ -576,8 +576,13 @@ def goes_outside(payee, terms):
     to pair it -- and offering it as a candidate is worse than saying
     nothing, because an equal and opposite amount weeks away is a coincidence
     wearing the shape of a transfer.
+
+    Both the name and the description are searched, because the bank
+    truncates the first and not the second. "Withdrawal Internet Banking
+    Tran" says nothing; its memo says "Withdrawal Internet Banking Transfer
+    To Loan 0004", and the word that matters is past the cut.
     """
-    text = (payee or "").lower()
+    text = "%s\n%s" % ((payee or "").lower(), (description or "").lower())
     return any(t in text for t in terms)
 
 
@@ -596,13 +601,14 @@ def transfer_candidates(conn, limit=100, exclude=()):
     """
     rows = conn.execute(
         "SELECT t.id, t.account_id, t.date, t.amount_cents, t.payee,"
-        "       a.name account FROM transactions t"
+        "       t.notes, a.name account FROM transactions t"
         " JOIN accounts a ON a.id = t.account_id"
         " WHERE t.deleted=0 AND t.transfer_id IS NULL AND t.parent_id IS NULL"
         " ORDER BY t.date").fetchall()
     # Both halves, not just the one leaving: a payment to Apple Pay is no more
     # pairable when it is the incoming side of the guess.
-    rows = [r for r in rows if not goes_outside(r["payee"], exclude)]
+    rows = [r for r in rows
+            if not goes_outside(r["payee"], exclude, r["notes"])]
     outs = [r for r in rows if r["amount_cents"] < 0]
     ins = [r for r in rows if r["amount_cents"] > 0]
 
@@ -650,11 +656,12 @@ def near_misses(conn, window_days=45, limit=40, exclude=()):
     """
     rows = conn.execute(
         "SELECT t.id, t.account_id, t.date, t.amount_cents, t.payee,"
-        "       a.name account FROM transactions t"
+        "       t.notes, a.name account FROM transactions t"
         " JOIN accounts a ON a.id = t.account_id"
         " WHERE t.deleted=0 AND t.transfer_id IS NULL AND t.parent_id IS NULL"
         " ORDER BY t.date").fetchall()
-    rows = [r for r in rows if not goes_outside(r["payee"], exclude)]
+    rows = [r for r in rows
+            if not goes_outside(r["payee"], exclude, r["notes"])]
     outs = [r for r in rows if r["amount_cents"] < 0]
     ins = [r for r in rows if r["amount_cents"] > 0]
 
@@ -701,13 +708,14 @@ def outside_movements(conn, exclude, limit=60):
     uncategorised.
     """
     rows = conn.execute(
-        "SELECT t.id, t.date, t.amount_cents, t.payee, a.name account"
+        "SELECT t.id, t.date, t.amount_cents, t.payee, t.notes,"
+        "       a.name account"
         " FROM transactions t JOIN accounts a ON a.id = t.account_id"
         " WHERE t.deleted=0 AND t.transfer_id IS NULL AND t.parent_id IS NULL"
         " ORDER BY t.date DESC").fetchall()
     out = []
     for r in rows:
-        if not goes_outside(r["payee"], exclude):
+        if not goes_outside(r["payee"], exclude, r["notes"]):
             continue
         out.append({"id": r["id"], "date": r["date"], "payee": r["payee"],
                     "amount_cents": r["amount_cents"],
@@ -735,7 +743,8 @@ def unpaired_movements(conn, limit=40, exclude=()):
              "deposit internet banking", "to share", "from share",
              "to checking", "from checking", "to savings", "from savings")
     rows = conn.execute(
-        "SELECT t.id, t.date, t.amount_cents, t.payee, a.name account"
+        "SELECT t.id, t.date, t.amount_cents, t.payee, t.notes,"
+        "       a.name account"
         " FROM transactions t JOIN accounts a ON a.id = t.account_id"
         " WHERE t.deleted=0 AND t.transfer_id IS NULL AND t.parent_id IS NULL"
         "   AND a.on_budget=1"
@@ -750,7 +759,7 @@ def unpaired_movements(conn, limit=40, exclude=()):
         text = (r["payee"] or "").lower()
         if not any(w in text for w in words):
             continue
-        if goes_outside(r["payee"], exclude):
+        if goes_outside(r["payee"], exclude, r["notes"]):
             continue
         # If anything anywhere could cancel it, it is not unpairable -- it is
         # merely unpaired, and the scans above are the right place for it.

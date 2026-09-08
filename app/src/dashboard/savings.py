@@ -83,9 +83,18 @@ def target_for(analysis, flexibility):
     if expected <= 0:
         return expected, "nothing spent here"
 
+    # What next month is heading for. A target above that is not a target --
+    # it tells you to spend more than you were going to, which is how a
+    # saving of minus seven pounds ends up on screen.
+    forecast = analysis.get("estimate_cents") or expected
+    ceiling = min(expected, forecast) if forecast > 0 else expected
+
     rule = FLEXIBILITY.get(flexibility, FLEXIBILITY[DEFAULT_FLEXIBILITY])
     if rule["percentile"] is None:
-        return expected, "fixed cost, left alone"
+        # You cannot decide to pay less rent, so the number to aim for is
+        # what it is actually going to cost -- the forecast, not the average
+        # of months that are already behind you.
+        return (forecast or expected), "fixed cost, budget what it will be"
 
     # An annual or occasional charge is not overspending, and trimming it
     # only moves the shortfall to the month the bill arrives.
@@ -105,11 +114,33 @@ def target_for(analysis, flexibility):
     if nonzero:
         target = max(target, min(nonzero))
 
-    target = min(target, expected)
-    if target >= expected:
-        return expected, "already at your lowest"
+    target = min(target, ceiling)
+    if target >= ceiling:
+        return ceiling, "already at your lowest"
     return target, "you spent this or less in %d of %d months" % (
         sum(1 for v in values if v <= target), len(values))
+
+
+def targets(conn, end_month=None, window=stats.WINDOW_MONTHS, analyses=None):
+    """{category_id: (target_cents, reason)} -- the plan's numbers alone.
+
+    Split out so a caller that has already analysed the ledger does not pay
+    for it twice; the overview needs both the forecast and the target on the
+    same screen.
+    """
+    if analyses is None:
+        analyses = {a["category_id"]: a for a in
+                    stats.analyse_all(conn, end_month=end_month, window=window)}
+    rows = conn.execute(
+        "SELECT id, flexibility FROM categories"
+        " WHERE hidden=0 AND is_income=0").fetchall()
+    out = {}
+    for row in rows:
+        a = analyses.get(row["id"])
+        if a is None:
+            continue
+        out[row["id"]] = target_for(a, flexibility_of(row))
+    return out
 
 
 def plan(conn, end_month=None, window=stats.WINDOW_MONTHS):
@@ -129,11 +160,15 @@ def plan(conn, end_month=None, window=stats.WINDOW_MONTHS):
         a = analyses.get(row["id"])
         if a is None:
             continue
-        expected = a.get("suggested_cents") or 0
+        # Measured against what next month is heading for, not against an
+        # average of months already spent. The saving is the gap between
+        # what will happen and what could, and the average is neither.
+        expected = (a.get("estimate_cents") or a.get("suggested_cents") or 0)
         if expected <= 0:
             continue
         flex = flexibility_of(row)
         target, reason = target_for(a, flex)
+        target = min(target, expected)
         total_expected += expected
         total_target += target
         out.append({
@@ -146,6 +181,7 @@ def plan(conn, end_month=None, window=stats.WINDOW_MONTHS):
             "kind": a.get("kind"),
             "confidence": a.get("confidence"),
             "expected_cents": expected,
+            "typical_cents": a.get("trimmed_mean_cents") or 0,
             "target_cents": target,
             "saves_cents": expected - target,
             "reason": reason,

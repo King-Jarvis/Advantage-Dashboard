@@ -1099,6 +1099,8 @@ class Handler(BaseHTTPRequestHandler):
         month = self._month()
         analyses = {a["category_id"]: a
                     for a in stats.analyse_all(conn, end_month=month)}
+        plan_targets = savings.targets(conn, end_month=month,
+                                       analyses=analyses)
         cats = conn.execute(
             "SELECT c.id, c.name, g.name gname FROM categories c"
             " JOIN category_groups g ON g.id = c.group_id"
@@ -1109,11 +1111,14 @@ class Handler(BaseHTTPRequestHandler):
         for c in cats:
             a = analyses.get(c["id"], {})
             budgeted = ledger.get_budget(conn, month, c["id"])
-            # What history says this will actually cost, as distinct from
-            # what it recommends you budget -- for a sinking fund those
-            # differ, and the chart should not pretend otherwise.
-            estimate = a.get("trimmed_mean_cents") or 0
-            recommended = a.get("suggested_cents")
+            # Two different questions, and they had been answering with the
+            # same number. The estimate is what next month costs if nothing
+            # changes, weighted towards recent months. The recommendation is
+            # what to aim for instead, drawn from the months you actually
+            # spent least in and leaving the fixed costs alone.
+            estimate = a.get("estimate_cents") or 0
+            target = plan_targets.get(c["id"])
+            recommended = target[0] if target else a.get("suggested_cents")
             if not budgeted and not estimate and not recommended:
                 continue
             if budgeted < estimate:
@@ -1123,6 +1128,10 @@ class Handler(BaseHTTPRequestHandler):
                 "budgeted": budgeted,
                 "recommended": recommended,
                 "estimate": estimate,
+                # The stable historical figure, kept so the detail panel can
+                # say what "normally" is next to what is coming.
+                "typical": a.get("trimmed_mean_cents") or 0,
+                "target_reason": target[1] if target else "",
                 "activity": ledger.category_activity(conn, c["id"], month),
                 # What has actually gone out this month, as a positive
                 # figure. A net inflow (a refund larger than the spending)
@@ -1139,6 +1148,7 @@ class Handler(BaseHTTPRequestHandler):
             "to_be_budgeted_cents": ledger.to_be_budgeted(conn, month),
             "budgeted_total_cents": sum(i["budgeted"] for i in items),
             "estimate_total_cents": sum(i["estimate"] for i in items),
+            "typical_total_cents": sum(i["typical"] for i in items),
             "actual_total_cents": sum(i["actual"] for i in items),
             "recommended_total_cents": sum(i["recommended"] or 0 for i in items),
             "short_categories": short,
@@ -1154,6 +1164,9 @@ class Handler(BaseHTTPRequestHandler):
         """
         month = self._month()
         rows = stats.analyse_all(conn, end_month=month)
+        analyses = {a["category_id"]: a for a in rows}
+        plan_targets = savings.targets(conn, end_month=month,
+                                       analyses=analyses)
         self.json_out({
             "month": month,
             "totals": stats.totals(conn, end_month=month),
@@ -1167,7 +1180,19 @@ class Handler(BaseHTTPRequestHandler):
                 "group": r["group"], "kind": r["kind"],
                 "confidence": r["confidence"],
                 "sample_months": r["sample_months"],
-                "suggested_cents": r["suggested_cents"],
+                # What next month costs if nothing changes.
+                "estimate_cents": r.get("estimate_cents") or 0,
+                # What this normally costs -- the stable figure behind it.
+                "typical_cents": r.get("trimmed_mean_cents") or 0,
+                # What to aim for instead. A different question from either,
+                # and it must not quietly answer with the same number.
+                "suggested_cents": (
+                    plan_targets[r["category_id"]][0]
+                    if r["category_id"] in plan_targets
+                    else r["suggested_cents"]),
+                "target_reason": (
+                    plan_targets[r["category_id"]][1]
+                    if r["category_id"] in plan_targets else ""),
                 "low_cents": r["low_cents"], "high_cents": r["high_cents"],
                 "trend_pct": r["trend_pct"], "basis": r["basis"],
                 "occurrences": r.get("occurrences", 0),
@@ -1233,11 +1258,18 @@ class Handler(BaseHTTPRequestHandler):
         window = max(1, min(36, window))
         month = self._month()
         a = stats.analyse(conn, cat, end_month=month, window=window)
+        target = savings.targets(conn, end_month=month, window=window,
+                                 analyses={cat: a}).get(cat)
         self.json_out({
             "category_id": cat, "months": a["months"],
             "spend": [a["spend_by_month"][m] for m in a["months"]],
             "budgeted": [ledger.get_budget(conn, m, cat) for m in a["months"]],
-            "suggested_cents": a["suggested_cents"],
+            # Three separate answers, deliberately. What it normally costs,
+            # what next month is heading for, and what to aim for instead.
+            "typical_cents": a["trimmed_mean_cents"],
+            "estimate_cents": a.get("estimate_cents") or 0,
+            "suggested_cents": target[0] if target else a["suggested_cents"],
+            "target_reason": target[1] if target else "",
             "low_cents": a["low_cents"], "high_cents": a["high_cents"],
             "kind": a["kind"], "confidence": a["confidence"],
             "sample_months": a["sample_months"], "basis": a["basis"],

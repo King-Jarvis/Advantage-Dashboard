@@ -291,7 +291,10 @@ function incomeSection(income, tbb) {
 function categoryRow(cat, refresh) {
   const s = suggestionFor(cat.id);
   const spent = Math.max(0, -cat.activity_cents);
-  const expected = s ? (s.suggested_cents ?? 0) : 0;
+  // The meter measures against what next month is heading for, not against
+  // the target: a bar that fills up as you approach the amount you were
+  // trying to beat tells you nothing about whether you are beating it.
+  const expected = s ? (s.estimate_cents ?? s.suggested_cents ?? 0) : 0;
   const over = cat.balance_cents < 0;
   const expanded = state.expanded === cat.id;
 
@@ -350,7 +353,7 @@ function categoryRow(cat, refresh) {
       progress(spent, expected, cat.budgeted_cents),
       el("div", { class: "hint undermeter",
         text: `${money(spent)} spent`
-            + (expected ? ` of about ${money(expected)} expected` : "")
+            + (expected ? ` of about ${money(expected)} heading your way` : "")
             + (s && s.kind ? ` · ${KIND_WORDS[s.kind] || s.kind}` : "") })),
     amount,
     moneyEl(cat.balance_cents, "balance"),
@@ -480,7 +483,10 @@ function detail(cat, suggestion, refresh) {
       fact("basis", h.basis || "—"),
       fact("covered months", String(h.sample_months)),
       fact("confidence", h.confidence),
-      fact("typical", h.suggested_cents === null ? "—" : money(h.suggested_cents)),
+      fact("normally", h.typical_cents ? money(h.typical_cents) : "—"),
+      fact("heading for", h.estimate_cents ? money(h.estimate_cents) : "—"),
+      fact("aim for", h.suggested_cents === null ? "—" : money(h.suggested_cents)),
+      fact("why", h.target_reason || ""),
       fact("range", h.low_cents === null ? "—"
         : `${money(h.low_cents)} – ${money(h.high_cents)}`));
 

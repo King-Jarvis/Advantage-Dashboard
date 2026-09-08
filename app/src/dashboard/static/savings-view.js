@@ -51,12 +51,12 @@ function summary(refresh) {
         moneyEl(saves, "hero"),
         el("span", { class: `pill ${saves > 0 ? "ok" : "warn"}`,
                      text: saves > 0
-                       ? `a month — ${pct}% less than you spend`
+                       ? `a month — ${pct}% less than you are heading for`
                        : "nothing to cut yet" })),
       el("p", { class: "label",
                 text: `Built from ${p.months.length} complete month`
                   + `${p.months.length === 1 ? "" : "s"}: ${span}. `
-                  + `Now ${money(p.expected_cents)} a month, `
+                  + `Heading for ${money(p.expected_cents)} next month, `
                   + `plan ${money(p.target_cents)}.` }),
       state.error ? el("div", { class: "error", text: state.error }) : null,
       state.note ? el("div", { class: "note", text: state.note }) : null,
@@ -64,13 +64,20 @@ function summary(refresh) {
       el("details", { class: "legend" },
         el("summary", { text: "How these targets are worked out" }),
         el("dl", {},
+          el("dt", { text: "Two different numbers, on purpose" }),
+          el("dd", { text: "\u201cHeading for\u201d is what next month costs "
+            + "if nothing changes, weighted towards your recent months. "
+            + "\u201cAim for\u201d is what to spend instead. They move "
+            + "independently: the first follows your habits, the second "
+            + "follows how low you have actually managed to go." }),
           el("dt", { text: "Every target is a month you have had" }),
           el("dd", { text: "Not a percentage off. Each one is a level your "
             + "own statements show you spent at or below, so it is something "
             + "you have already done rather than something to attempt." }),
           el("dt", { text: "Cannot be cut" }),
           el("dd", { text: "Rent, loans, insurance. Budgeting less does not "
-            + "make the bill smaller, so these are left exactly as they are." }),
+            + "make the bill smaller, so these are budgeted at what they are "
+            + "heading for rather than trimmed." }),
           el("dt", { text: "Some room" }),
           el("dd", { text: "Groceries, fuel, the things you need but choose "
             + "how much of. Trimmed gently." }),
