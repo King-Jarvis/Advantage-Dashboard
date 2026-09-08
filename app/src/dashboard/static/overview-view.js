@@ -83,7 +83,8 @@ export async function overviewView(container, month, { onMonth, onEdit }) {
     el("header", { class: "node-head" },
       el("span", { class: "node-title", text: "By category" }),
       el("div", { class: "spacer" }),
-      el("span", { class: "label", text: "largest first · select one to edit" })),
+      el("span", { class: "label",
+                   text: "most spent this month first · select one to edit" })),
     el("div", { class: "node-body" }, chart, legend));
 
   mount(container, summary, graph);

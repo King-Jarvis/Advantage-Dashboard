@@ -14,9 +14,10 @@
  *
  * Kanso: the simpler drawing carries the same three facts.
  *
- * Ordered largest to smallest, left to right. That ordering makes the chart a
- * ranking, which is the honest reading: the categories that decide whether
- * the month works are on the left, and attention should go there first.
+ * Ordered by what has actually gone out this month, largest first. That makes
+ * the chart a ranking of where the money went, which is the question you have
+ * when you open it -- and unlike a ranking by historical average, it moves as
+ * the month does.
  *
  * The lines are drawn as straight segments between bar centres with visible
  * points, not smoothed. A curve through categorical data implies the space
@@ -30,6 +31,28 @@ import { money, svg } from "./dom.js";
 const W = 900, H = 340;
 const PAD = { top: 24, right: 20, bottom: 68, left: 68 };
 const MAX_BAR = 64;
+
+// Labels are 11px (see .bchart-label). SVG cannot measure text before it is
+// in the document, and measuring would mean a reflow per render, so this
+// approximates: a proportional face at 11px averages a little under 6px a
+// character. Only used to choose an angle, where being a few pixels out
+// changes nothing.
+const CHAR_PX = 5.9;
+const LABEL_CHARS = 18;
+
+/* The shallowest angle at which names of this length stop colliding.
+ *
+ * A rotated label needs cos(angle) x its length of horizontal room. Shallow
+ * reads more easily, so this takes the gentlest angle that fits and only
+ * steepens when it has to -- ending at vertical, which always fits because
+ * it needs no horizontal room at all. */
+function labelAngle(slot, chars) {
+  const len = Math.min(chars, LABEL_CHARS) * CHAR_PX;
+  for (const a of [38, 45, 55, 65, 75]) {
+    if (Math.cos((a * Math.PI) / 180) * len <= slot * 0.98) return a;
+  }
+  return 90;
+}
 
 function niceTop(max) {
   if (max <= 0) return 100;
@@ -51,11 +74,12 @@ function truncate(name, limit) {
 /* `items`: [{ id, name, budgeted, recommended, estimate }] in cents. */
 export function budgetChart(items, { onPick, height = H } = {}) {
   const root = svg("svg", {
-    viewBox: `0 0 ${W} ${height}`, class: "bchart", role: "img",
-    "aria-label": "Budget by category, largest first",
+    class: "bchart", role: "img",
+    "aria-label": "Spending by category, most spent first",
   });
 
   if (!items.length) {
+    root.setAttribute("viewBox", `0 0 ${W} ${height}`);
     root.append(svg("text", {
       x: W / 2, y: height / 2, "text-anchor": "middle", class: "chart-empty",
       text: "Nothing budgeted yet",
@@ -63,18 +87,48 @@ export function budgetChart(items, { onPick, height = H } = {}) {
     return root;
   }
 
-  // Largest first. Ranked by what it will actually cost, since that is what
-  // decides whether the month works -- not by what happens to be budgeted.
-  const data = [...items].sort(
-    (a, b) => (b.estimate || b.budgeted || 0) - (a.estimate || a.budgeted || 0));
+  // Most spent first, by what has actually gone out this month.
+  //
+  // It ranked by the historical estimate before, which answers "where does
+  // your money usually go" -- a fair question, and not the one you have when
+  // you open this. Ranking by what has actually left puts the categories
+  // doing the damage *this* month on the left, which is where attention
+  // goes, and it changes as the month does.
+  //
+  // Estimate and budget break ties, so the categories nothing has been spent
+  // on yet still fall in a sensible order rather than an arbitrary one.
+  const rank = (d) => [d.actual || 0, d.estimate || 0, d.budgeted || 0];
+  const data = [...items].sort((a, b) => {
+    const [aa, ae, ab] = rank(a), [ba, be, bb] = rank(b);
+    return (ba - aa) || (be - ae) || (bb - ab) || a.name.localeCompare(b.name);
+  });
 
   const innerW = W - PAD.left - PAD.right;
-  const innerH = height - PAD.top - PAD.bottom;
   const top = niceTop(Math.max(
     ...data.map((d) => Math.max(d.estimate || 0, d.budgeted || 0,
                                 d.actual || 0, d.recommended || 0))));
   const slot = innerW / data.length;
   const barW = Math.min(MAX_BAR, slot * 0.62);
+
+  // Room for the names, which depends on how many there are. Fixed padding
+  // is what forced the old chart to drop every second label: at twenty
+  // categories they did not fit, so half were thrown away rather than the
+  // chart growing by the forty pixels it needed.
+  const longest = Math.max(
+    ...data.map((d) => Math.min(d.name.length, LABEL_CHARS)));
+  const angle = labelAngle(slot, longest);
+  const labelRun = longest * CHAR_PX;
+  const padBottom = Math.max(
+    PAD.bottom,
+    Math.ceil(Math.sin((angle * Math.PI) / 180) * labelRun) + 34);
+
+  // The drawing grows downwards to fit them; the plot keeps its full height
+  // rather than being squeezed to make room.
+  const chartH = height - PAD.bottom + padBottom;
+  const innerH = height - PAD.top - PAD.bottom;
+  root.setAttribute("viewBox", `0 0 ${W} ${chartH}`);
+
+  const labelY = PAD.top + innerH + 22;
   const cx = (i) => PAD.left + slot * i + slot / 2;
   const y = (v) => PAD.top + innerH - (Math.max(0, v) / top) * innerH;
   const base = y(0);
@@ -158,7 +212,6 @@ export function budgetChart(items, { onPick, height = H } = {}) {
   flushRun();
 
   // Points, labels and hit targets.
-  const labelEvery = data.length > 14 ? 2 : 1;
   data.forEach((d, i) => {
     const short = (d.budgeted || 0) < (d.estimate || 0);
     const g = svg("g", {
@@ -183,17 +236,16 @@ export function budgetChart(items, { onPick, height = H } = {}) {
                     width: slot, height: innerH + 10 }));
     root.append(g);
 
-    if (i % labelEvery === 0) {
-      root.append(svg("text", {
-        class: "bchart-label", x: cx(i), y: height - PAD.bottom + 22,
-        "text-anchor": "end",
-        // Rotated: horizontal names collide past about six categories, and
-        // truncating them all to fit would lose the distinction between
-        // "Groceries" and "Gifts".
-        transform: `rotate(-38 ${cx(i)} ${height - PAD.bottom + 22})`,
-        text: truncate(d.name, 16),
-      }));
-    }
+    root.append(svg("text", {
+      class: "bchart-label", x: cx(i), y: labelY,
+      "text-anchor": "end",
+      // Rotated, and steeply enough for this many columns. Every name is
+      // drawn: dropping every second one saved the collision and cost the
+      // reader the ability to tell which bar is which, which is the only
+      // reason the labels are there.
+      transform: `rotate(${-angle} ${cx(i)} ${labelY})`,
+      text: truncate(d.name, LABEL_CHARS),
+    }));
 
     if (onPick) {
       const fire = () => onPick(d);
