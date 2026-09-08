@@ -333,3 +333,81 @@ def test_zeroing_a_budget_lets_a_spent_out_category_go(conn, book):
 
 def book_group(conn):
     return conn.execute("SELECT id FROM category_groups LIMIT 1").fetchone()["id"]
+
+
+# ── scanning for transfers that did not pair ──────────────────────────────
+def test_a_pair_outside_the_window_is_a_near_miss_not_a_candidate(conn, book):
+    """The strict scan must not widen; the wider one must find it.
+
+    Two equal and opposite amounts eleven days apart could be a transfer that
+    cleared slowly, or two unrelated things. The answer is to show it and say
+    how far apart it is, not to guess.
+    """
+    out = ledger.add_transaction(conn, book["checking"], "2026-01-02",
+                                 -50_00, "To savings")
+    inn = ledger.add_transaction(conn, book["savings"], "2026-01-13",
+                                 50_00, "From checking")
+    assert ledger.transfer_candidates(conn) == []
+    near = ledger.near_misses(conn)
+    assert len(near) == 1
+    assert near[0]["days_apart"] == 11
+    assert {near[0]["out_id"], near[0]["in_id"]} == {out, inn}
+
+
+def test_a_near_miss_can_be_linked_once_you_recognise_it(conn, book):
+    ledger.add_transaction(conn, book["checking"], "2026-01-02", -50_00, "Out")
+    ledger.add_transaction(conn, book["savings"], "2026-01-13", 50_00, "In")
+    near = ledger.near_misses(conn)[0]
+    ledger.link_transfer(conn, near["out_id"], near["in_id"])
+    assert ledger.near_misses(conn) == []
+    assert len(ledger.transfers(conn)) == 1
+
+
+def test_the_wider_scan_still_refuses_one_account(conn, book):
+    """A refund cancelling a charge is not a movement, at any distance."""
+    ledger.add_transaction(conn, book["checking"], "2026-01-02", -16_23,
+                           "Amazon")
+    ledger.add_transaction(conn, book["checking"], "2026-03-20", 16_23,
+                           "Amazon refund")
+    assert ledger.near_misses(conn) == []
+
+
+def test_the_wider_scan_stops_somewhere(conn, book):
+    ledger.add_transaction(conn, book["checking"], "2026-01-02", -50_00, "Out")
+    ledger.add_transaction(conn, book["savings"], "2026-11-13", 50_00, "In")
+    assert ledger.near_misses(conn, window_days=45) == []
+    assert len(ledger.near_misses(conn, window_days=400)) == 1
+
+
+def test_a_movement_with_no_other_half_is_named_as_such(conn, book):
+    """Money to Apple Pay will never pair, and saying nothing implies it may."""
+    ledger.add_transaction(conn, book["checking"], "2026-01-02", -35_00,
+                           "Transfer to Apple Pay")
+    assert ledger.transfer_candidates(conn) == []
+    assert ledger.near_misses(conn) == []
+    lone = ledger.unpaired_movements(conn)
+    assert [r["payee"] for r in lone] == ["Transfer to Apple Pay"]
+
+
+def test_something_that_could_still_pair_is_not_called_unpairable(conn, book):
+    ledger.add_transaction(conn, book["checking"], "2026-01-02", -35_00,
+                           "Transfer to Apple Pay")
+    ledger.add_transaction(conn, book["savings"], "2026-02-20", 35_00,
+                           "Transfer from Apple Pay")
+    assert ledger.unpaired_movements(conn) == []
+
+
+def test_ordinary_spending_is_not_a_movement(conn, book):
+    ledger.add_transaction(conn, book["checking"], "2026-01-02", -35_00,
+                           "Tesco Stores")
+    assert ledger.unpaired_movements(conn) == []
+
+
+def test_an_off_budget_account_can_receive_what_cannot_pair(conn, book):
+    wallet = ledger.create_account(conn, "Apple Pay", type="wallet",
+                                   on_budget=False)
+    tid = ledger.add_transaction(conn, book["checking"], "2026-01-02", -35_00,
+                                 "Transfer to Apple Pay")
+    ledger.send_to_account(conn, tid, wallet)
+    assert ledger.unpaired_movements(conn) == []
+    assert len(ledger.transfers(conn)) == 1

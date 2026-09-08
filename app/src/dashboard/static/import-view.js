@@ -17,6 +17,7 @@ const state = {
   addingAccount: false,
   unfiled: [], allCats: [], unfiledBand: "in", showFiled: false,
   tracking: [], transfers: [], candidates: [], history: [],
+  nearMisses: [], unpaired: [], scanned: false, scanning: false,
   historyOpen: false, transfersOpen: null, lastAccount: null,
 };
 
@@ -212,8 +213,110 @@ function unfiledPanel(refresh) {
  * Suggestions are separated from facts. A pair the matcher spotted is a guess
  * that two amounts belong together; a linked transfer is something you said.
  */
+async function scanTransfers(refresh) {
+  state.scanning = true; state.error = ""; state.note = "";
+  refresh(true);
+  try {
+    const r = await get("/api/view/transfers?wide=1");
+    state.candidates = r.candidates || [];
+    state.transfers = r.transfers || [];
+    state.nearMisses = r.near_misses || [];
+    state.unpaired = r.unpaired || [];
+    state.scanned = true;
+    const found = state.candidates.length;
+    state.note = found
+      ? `Found ${found} pair${found === 1 ? "" : "s"} to look at.`
+      : "Nothing new pairs cleanly. What the scan rejected is below.";
+  } catch (e) {
+    state.error = (e && e.message) || "Could not scan.";
+  }
+  state.scanning = false;
+  return refresh();
+}
+
+/* What the scan rejected, and why.
+ *
+ * "No candidates" is not an answer to "where is my missing transfer". These
+ * two lists are the two reasons a movement stays unpaired, and they need
+ * different things done about them: one is a date the matcher would not
+ * accept, the other is a second half that does not exist. */
+function scanFindings(refresh) {
+  if (!state.scanned) return null;
+  const bits = [];
+
+  if (state.nearMisses.length) {
+    bits.push(el("div", { class: "label xferhead", text: "matched, but too far apart" }));
+    bits.push(el("div", { class: "hint",
+      text: "The amounts cancel and the accounts differ, but the two dates "
+          + "are further apart than the matcher will guess across. Link one "
+          + "only if you recognise it -- equal and opposite months apart is "
+          + "usually coincidence." }));
+    for (const c of state.nearMisses) {
+      bits.push(el("div", { class: "xfer-row" },
+        el("div", { class: "grow" },
+          el("div", {},
+            el("span", { class: "xfer-acct", text: c.from_account }),
+            el("span", { class: "xfer-arrow", text: " → " }),
+            el("span", { class: "xfer-acct", text: c.to_account })),
+          el("div", { class: "hint",
+            text: `${c.date} → ${c.in_date} · ${c.days_apart} days apart · `
+                + `${c.out_payee || "—"} / ${c.in_payee || "—"}` })),
+        moneyEl(c.amount_cents, "xfer-amt"),
+        el("button", { class: "btn", type: "button", text: "Link anyway",
+          onclick: async () => {
+            try {
+              await post("/api/edit/transfer",
+                         { out_id: c.out_id, in_id: c.in_id });
+              state.note = "Linked as one movement.";
+            } catch (e) {
+              state.error = (e && e.message) || "Could not link those.";
+            }
+            return scanTransfers(refresh);
+          } })));
+    }
+  }
+
+  if (state.unpaired.length) {
+    const n = state.unpaired.length;
+    bits.push(el("div", { class: "label xferhead",
+                          text: "no other half in the ledger" }));
+    bits.push(el("div", { class: "hint",
+      text: `${n} movement${n === 1 ? "" : "s"} whose matching row is not `
+          + "here at all — money that went to Apple Pay, Venmo, a loan or "
+          + "another person. No scan will ever pair these, however wide. "
+          + (state.tracking.length
+             ? "Use \u201cSend to\u201d on the row to record where it went."
+             : "Add an off-budget account for the place it went (Wallet), "
+               + "then use \u201cSend to\u201d on the row.") }));
+    for (const r of state.unpaired.slice(0, 12)) {
+      bits.push(el("div", { class: "xfer-row" },
+        el("div", { class: "grow" },
+          el("div", { text: r.payee || "—" }),
+          el("div", { class: "hint", text: `${r.date} · ${r.account}` })),
+        moneyEl(r.amount_cents, "xfer-amt")));
+    }
+    if (n > 12) {
+      bits.push(el("div", { class: "hint", text: `and ${n - 12} more.` }));
+    }
+  }
+
+  if (!bits.length) {
+    bits.push(el("div", { class: "hint",
+      text: "Nothing left over: every movement is either linked or does not "
+          + "look like one." }));
+  }
+  return el("div", {}, ...bits);
+}
+
 function transfersPanel(refresh) {
   const bits = [];
+
+  bits.push(el("div", { class: "row" },
+    el("button", { class: "btn", type: "button", disabled: state.scanning,
+                   text: state.scanning ? "Scanning\u2026" : "Scan for transfers",
+                   onclick: () => scanTransfers(refresh) }),
+    el("span", { class: "hint",
+      text: "Re-checks every unlinked row, and says what it rejected." })));
 
   if (state.candidates.length) {
     bits.push(el("div", { class: "label", text: "looks like a pair" }));
@@ -285,6 +388,8 @@ function transfersPanel(refresh) {
       text: "No movements between accounts yet. Import a second account and "
           + "matching pairs will be suggested here." });
   }
+  const findings = scanFindings(refresh);
+  if (findings) bits.push(findings);
   return el("div", { class: "xfers" }, ...bits);
 }
 
@@ -405,9 +510,15 @@ export async function importView(container, { onDone } = {}) {
   const newName = el("input", {
     class: "input", type: "text", id: "acct-name",
     placeholder: "e.g. UFCU Checking", "aria-label": "New account name" });
+  // "Wallet" exists because Apple Pay is not an investment, and picking
+  // Investment to get an off-budget account is not a thought anyone has.
+  // Money moved to one has left the budget without being spent, which is
+  // exactly what a transfer to Venmo or a loan needs somewhere to go.
+  const OFF_BUDGET = new Set(["investment", "wallet"]);
   const newType = el("select", { class: "input", "aria-label": "Account type" },
     ...[["checking", "Checking"], ["savings", "Savings"],
         ["credit", "Credit card"], ["cash", "Cash"],
+        ["wallet", "Wallet — Apple Pay, Venmo, a loan (off budget)"],
         ["investment", "Investment (off budget)"]].map(([v, t]) =>
       el("option", { value: v, text: t })));
 
@@ -420,7 +531,7 @@ export async function importView(container, { onDone } = {}) {
       // are about to spend, and counting it as such makes every envelope lie.
       await post("/api/accounts", {
         name, type: newType.value,
-        on_budget: newType.value !== "investment",
+        on_budget: !OFF_BUDGET.has(newType.value),
       });
       state.note = `Added ${name}.`;
       // Close it: adding one is usually the whole errand, and a form left

@@ -589,10 +589,26 @@ class Handler(BaseHTTPRequestHandler):
             "tree": ledger.ledger_tree(conn, month)})
 
     def api_xfers(self, conn, session):
-        """Linked movements, and pairs that look like one."""
+        """Linked movements, pairs that look like one, and what will never be.
+
+        Three lists rather than one, because "no candidates" answers a
+        different question from the one being asked. Someone who knows a
+        transfer is missing needs to know whether nothing matched, something
+        matched and was rejected for being eleven days apart, or the other
+        half is in a statement they will never import.
+        """
         from . import ledger
-        self.json_out({"transfers": ledger.transfers(conn),
-                       "candidates": ledger.transfer_candidates(conn)})
+        wide = "wide" in self.query()
+        self.json_out({
+            "transfers": ledger.transfers(conn),
+            "candidates": ledger.transfer_candidates(conn),
+            "window_days": ledger.TRANSFER_WINDOW_DAYS,
+            # Only on request: both are a full sweep of the ledger, and the
+            # panel opens on every visit to the import screen.
+            "near_misses": ledger.near_misses(conn) if wide else [],
+            "unpaired": ledger.unpaired_movements(conn) if wide else [],
+            "scanned": wide,
+        })
 
     def api_xferlink(self, conn, session):
         from . import ledger

@@ -612,6 +612,105 @@ def transfer_candidates(conn, limit=100):
     return pairs
 
 
+def near_misses(conn, window_days=45, limit=40):
+    """Amounts that cancel across two accounts, but too far apart to propose.
+
+    The strict scan is deliberately narrow: two equal and opposite amounts in
+    one week can genuinely be a refund here and a payment there, and joining
+    those silently would invent a movement that never happened. But when it
+    finds nothing and you know a transfer is missing, "no candidates" is not
+    an answer -- it does not say whether nothing matched, or something matched
+    and was rejected for being eleven days apart.
+
+    So this is the same test with the calendar relaxed and the result labelled
+    rather than proposed. Same-account pairs are left out entirely: a movement
+    has two accounts by definition, and an Amazon charge cancelling an Amazon
+    refund in one account is not a near miss, it is a refund.
+    """
+    rows = conn.execute(
+        "SELECT t.id, t.account_id, t.date, t.amount_cents, t.payee,"
+        "       a.name account FROM transactions t"
+        " JOIN accounts a ON a.id = t.account_id"
+        " WHERE t.deleted=0 AND t.transfer_id IS NULL AND t.parent_id IS NULL"
+        " ORDER BY t.date").fetchall()
+    outs = [r for r in rows if r["amount_cents"] < 0]
+    ins = [r for r in rows if r["amount_cents"] > 0]
+
+    used, pairs = set(), []
+    for o in outs:
+        if o["id"] in used:
+            continue
+        best = None
+        for i in ins:
+            if i["id"] in used or i["account_id"] == o["account_id"]:
+                continue
+            if i["amount_cents"] != -o["amount_cents"]:
+                continue
+            gap = abs((_date(i["date"]) - _date(o["date"])).days)
+            if gap <= TRANSFER_WINDOW_DAYS or gap > window_days:
+                continue
+            # The closest in time is the likeliest, and the only one worth
+            # showing: a list of every amount that ever matched is noise.
+            if best is None or gap < best[1]:
+                best = (i, gap)
+        if best is None:
+            continue
+        i, gap = best
+        used.add(o["id"])
+        used.add(i["id"])
+        pairs.append({
+            "out_id": o["id"], "in_id": i["id"],
+            "amount_cents": -o["amount_cents"],
+            "from_account": o["account"], "to_account": i["account"],
+            "out_payee": o["payee"], "in_payee": i["payee"],
+            "date": o["date"], "in_date": i["date"], "days_apart": gap,
+        })
+        if len(pairs) >= limit:
+            break
+    return pairs
+
+
+def unpaired_movements(conn, limit=40):
+    """Rows that read like a movement and have no other half anywhere.
+
+    Money leaving for Apple Pay, Venmo, a loan or another person is a real
+    movement whose second half is in a statement nobody downloads. No scan
+    will ever pair these, however wide the window, and saying "no candidates"
+    forever is how someone concludes the matcher is broken when it is
+    working. They need the other treatment -- an off-budget account to send
+    them to -- so they are named separately.
+    """
+    words = ("transfer", "xfer", "zelle", "venmo", "apple pay", "cash app",
+             "to loan", "from loan", "withdrawal internet banking",
+             "deposit internet banking")
+    rows = conn.execute(
+        "SELECT t.id, t.date, t.amount_cents, t.payee, a.name account"
+        " FROM transactions t JOIN accounts a ON a.id = t.account_id"
+        " WHERE t.deleted=0 AND t.transfer_id IS NULL AND t.parent_id IS NULL"
+        "   AND a.on_budget=1"
+        " ORDER BY t.date DESC").fetchall()
+
+    amounts = {}
+    for r in rows:
+        amounts.setdefault(-r["amount_cents"], []).append(r)
+
+    out = []
+    for r in rows:
+        text = (r["payee"] or "").lower()
+        if not any(w in text for w in words):
+            continue
+        # If anything anywhere could cancel it, it is not unpairable -- it is
+        # merely unpaired, and the scans above are the right place for it.
+        if any(o["id"] != r["id"] for o in amounts.get(r["amount_cents"], [])):
+            continue
+        out.append({"id": r["id"], "date": r["date"], "payee": r["payee"],
+                    "amount_cents": r["amount_cents"],
+                    "account": r["account"]})
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _date(text):
     import datetime
     return datetime.date.fromisoformat(str(text)[:10])
