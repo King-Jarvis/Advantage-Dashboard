@@ -942,6 +942,89 @@ def ledger_tree(conn, month=None, limit=1500):
     return sorted(out, key=lambda a: a["name"])
 
 
+def transaction_detail(conn, txn_id):
+    """Everything known about one charge, for the screen that asks.
+
+    The list can only afford a line per row, so it shows the bank's NAME
+    field -- which the bank truncates, often at thirty-two characters. The
+    MEMO it also sent is usually longer and more specific ("SQ *CORNER
+    KITCHEN - PA Austin TX" against "Riverside Cafe - Br Bristol Uk W"), and
+    was being stored and never shown. On this ledger that is true of most
+    rows, which makes "what actually was this?" a question the screen could
+    not answer about almost anything.
+    """
+    r = conn.execute(
+        "SELECT t.*, a.name account, a.on_budget, c.name category,"
+        "       g.name group_name"
+        " FROM transactions t"
+        " JOIN accounts a ON a.id = t.account_id"
+        " LEFT JOIN categories c ON c.id = t.category_id"
+        " LEFT JOIN category_groups g ON g.id = c.group_id"
+        " WHERE t.id=? AND t.deleted=0", (txn_id,)).fetchone()
+    if r is None:
+        raise KeyError(txn_id)
+
+    out = {
+        "id": r["id"], "date": r["date"], "amount_cents": r["amount_cents"],
+        "payee": r["payee"], "payee_norm": r["payee_norm"],
+        # The bank's fuller description. Named for what it is rather than
+        # "notes", which sounds like something you typed.
+        "description": r["notes"] or "",
+        "account": r["account"], "account_id": r["account_id"],
+        "on_budget": bool(r["on_budget"]),
+        "category": r["category"], "category_id": r["category_id"],
+        "group": r["group_name"],
+        "category_source": r["category_source"] or "",
+        "cleared": bool(r["cleared"]), "reconciled": bool(r["reconciled"]),
+        "source": r["source"], "created_at": r["created_at"],
+        "updated_at": r["updated_at"],
+        "is_transfer": bool(r["transfer_id"]),
+        "is_split_part": bool(r["parent_id"]),
+    }
+
+    if r["transfer_id"]:
+        other = conn.execute(
+            "SELECT t.date, t.amount_cents, t.payee, a.name account"
+            " FROM transactions t JOIN accounts a ON a.id = t.account_id"
+            " WHERE t.id=?", (r["transfer_id"],)).fetchone()
+        if other is not None:
+            out["transfer_with"] = {
+                "date": other["date"], "account": other["account"],
+                "payee": other["payee"],
+                "amount_cents": other["amount_cents"]}
+
+    if r["parent_id"]:
+        parent = conn.execute(
+            "SELECT date, amount_cents, payee FROM transactions WHERE id=?",
+            (r["parent_id"],)).fetchone()
+        if parent is not None:
+            out["split_of"] = {"date": parent["date"], "payee": parent["payee"],
+                               "amount_cents": parent["amount_cents"]}
+
+    parts = conn.execute(
+        "SELECT t.id, t.amount_cents, c.name category FROM transactions t"
+        " LEFT JOIN categories c ON c.id = t.category_id"
+        " WHERE t.parent_id=? AND t.deleted=0 ORDER BY t.amount_cents",
+        (txn_id,)).fetchall()
+    if parts:
+        out["split_parts"] = [
+            {"id": x["id"], "amount_cents": x["amount_cents"],
+             "category": x["category"]} for x in parts]
+
+    # Where it came from, when it came from a statement. The exact line the
+    # bank sent is the last word on what a charge was, and nothing else in
+    # the application can answer a dispute.
+    imp = conn.execute(
+        "SELECT ir.raw, ir.line_no, b.filename, b.uploaded_at"
+        " FROM import_rows ir JOIN import_batches b ON b.id = ir.batch_id"
+        " WHERE ir.txn_id=? LIMIT 1", (txn_id,)).fetchone()
+    if imp is not None:
+        out["import"] = {"filename": imp["filename"], "line_no": imp["line_no"],
+                         "uploaded_at": imp["uploaded_at"],
+                         "raw": imp["raw"] or ""}
+    return out
+
+
 def payee_groups(conn, filed=False, limit=300):
     """What is still unfiled, grouped by merchant, biggest first.
 

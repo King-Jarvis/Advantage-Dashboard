@@ -2341,3 +2341,58 @@ def test_classifying_sends_nothing_when_the_feature_is_off(live):
     assert status == 200
     assert body["allowed"] is False
     assert body["asked"] == 0
+
+
+# ── one charge, in full ───────────────────────────────────────────────────
+def test_a_charge_detail_needs_a_session(live):
+    status, _, _ = call(live, "GET", "/api/view/transaction/" + "a" * 32)
+    assert status == 401
+
+
+def test_a_charge_detail_carries_the_banks_fuller_description(live):
+    """The list shows NAME, which the bank truncates. MEMO is the answer to
+    "what actually was this", and was stored and never shown."""
+    cookie, _ = login(live)
+    from dashboard import ledger, storage
+    conn = storage.connect()
+    acct = ledger.create_account(conn, "Checking")
+    grp = ledger.create_category_group(conn, "Everyday")
+    cat = ledger.create_category(conn, grp, "Work Food")
+    tid = ledger.add_transaction(
+        conn, acct, "2026-08-26", -13_72, "Riverside Cafe - Br Bristol Uk W",
+        cat, notes="SQ *RIVERSIDE CAFE - BR Bristol UK")
+    conn.close()
+
+    status, _, body = call(live, "GET", f"/api/view/transaction/{tid}",
+                           headers={"Cookie": cookie})
+    assert status == 200, body
+    assert body["payee"] == "Riverside Cafe - Br Bristol Uk W"
+    assert body["description"] == "SQ *RIVERSIDE CAFE - BR Bristol UK"
+    assert body["category"] == "Work Food"
+    assert body["account"] == "Checking"
+    assert body["amount_cents"] == -13_72
+
+
+def test_an_unknown_charge_is_a_404_not_a_crash(live):
+    cookie, _ = login(live)
+    status, _, _ = call(live, "GET", "/api/view/transaction/" + "b" * 32,
+                        headers={"Cookie": cookie})
+    assert status == 404
+
+
+def test_a_charge_detail_names_the_other_half_of_a_transfer(live):
+    cookie, _ = login(live)
+    from dashboard import ledger, storage
+    conn = storage.connect()
+    a = ledger.create_account(conn, "Checking")
+    b = ledger.create_account(conn, "Savings")
+    out = ledger.add_transaction(conn, a, "2026-01-02", -50_00, "To savings")
+    inn = ledger.add_transaction(conn, b, "2026-01-03", 50_00, "From checking")
+    ledger.link_transfer(conn, out, inn)
+    conn.close()
+
+    _, _, body = call(live, "GET", f"/api/view/transaction/{out}",
+                      headers={"Cookie": cookie})
+    assert body["is_transfer"] is True
+    assert body["transfer_with"]["account"] == "Savings"
+    assert body["transfer_with"]["amount_cents"] == 50_00

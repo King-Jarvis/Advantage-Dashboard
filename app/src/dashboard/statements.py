@@ -13,6 +13,7 @@ discovered months later in a budget that quietly does not add up.
 
 import csv
 import hashlib
+import html
 import io
 import json
 import re
@@ -220,6 +221,18 @@ def _amount(raw, mapping, sign):
 _TAG = re.compile(r"<([A-Z0-9.]+)>([^<\r\n]*)", re.I)
 
 
+def _unescape(value):
+    """SGML entities back to the characters they stand for.
+
+    OFX is SGML, so a bank writes "Harbour Coffee &amp; Bun". Left alone it
+    reaches the screen with the entity showing, and worse, reaches
+    norm_payee, which strips the punctuation and leaves "amp" behind as a
+    word -- a token the similarity matcher then treats as part of the
+    merchant's name.
+    """
+    return html.unescape(value) if value and "&" in value else value
+
+
 def parse_ofx(text):
     """Parse the SGML-ish OFX body.
 
@@ -238,8 +251,9 @@ def parse_ofx(text):
             raw_date = fields.get("DTPOSTED", "")[:8]
             row["date"] = datetime.strptime(raw_date, "%Y%m%d").strftime("%Y-%m-%d")
             row["amount_cents"] = to_cents(fields.get("TRNAMT", ""))
-            row["payee"] = fields.get("NAME") or fields.get("PAYEE") or ""
-            row["notes"] = fields.get("MEMO", "")
+            row["payee"] = _unescape(
+                fields.get("NAME") or fields.get("PAYEE") or "")
+            row["notes"] = _unescape(fields.get("MEMO", ""))
             # FITID is the bank's own unique id for the transaction, which is
             # a far better deduplication key than anything we could derive.
             row["fitid"] = fields.get("FITID", "")

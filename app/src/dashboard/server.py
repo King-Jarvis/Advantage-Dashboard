@@ -110,6 +110,8 @@ ROUTES = [
     ("history",  {"GET"},         re.compile(r"^/api/view/history$"),      "session"),
     ("coverage", {"GET"},         re.compile(r"^/api/view/coverage$"),     "session"),
     ("txns",     {"GET"},         re.compile(r"^/api/view/transactions$"),  "session"),
+    ("txnone",   {"GET"},
+     re.compile(r"^/api/view/transaction/([0-9a-f]{32})$"),                 "session"),
     ("unfiled",  {"GET"},         re.compile(r"^/api/view/unfiled$"),       "session"),
     ("fileone",  {"PATCH", "DELETE"},
      re.compile(r"^/api/edit/transaction/([0-9a-f]{32})$"),                 "session"),
@@ -507,6 +509,18 @@ class Handler(BaseHTTPRequestHandler):
         except KeyError:
             return self.fail(404, "no such import")
         self.json_out(out)
+
+    def api_txnone(self, conn, session, txn_id):
+        """Everything known about one charge.
+
+        The list shows the bank's NAME, which the bank truncates. The fuller
+        description it also sent has always been stored and never displayed.
+        """
+        from . import ledger
+        try:
+            self.json_out(ledger.transaction_detail(conn, txn_id))
+        except KeyError:
+            self.fail(404, "no such transaction")
 
     def api_unfiled(self, conn, session):
         from . import ledger

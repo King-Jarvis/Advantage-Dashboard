@@ -61,6 +61,8 @@ PURPOSE = {
     "history": "Import batches and what they covered",
     "coverage": "Which months each account has statements for",
     "txns": "Transactions, filtered",
+    "txnone": "Everything known about one charge, including the bank's"
+              " fuller description and the line it arrived on",
     "unfiled": "Rows with no category yet",
     "fileone": "Edit or delete one transaction",
     "filemany": "File every row for one merchant at once",
@@ -98,7 +100,7 @@ GROUPS = [
     ("View", "session",
      "Reads. No CSRF token needed.",
      ["home", "overview", "budget", "suggest", "agenda", "calendar", "inbox",
-      "msgbody", "syncst", "txns", "unfiled", "ledger", "xfers", "history",
+      "msgbody", "syncst", "txns", "txnone", "unfiled", "ledger", "xfers", "history",
       "coverage", "image"]),
     ("Edit", "session + CSRF",
      "Every mutation needs the `X-CSRF-Token` header from login.",

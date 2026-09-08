@@ -49,6 +49,7 @@ Reads. No CSRF token needed.
 | GET | `/api/view/message/{id}` | A message body, fetched on demand and cached, HTML stripped |
 | GET | `/api/view/status` | Last sync, pending pushes and any error |
 | GET | `/api/view/transactions` | Transactions, filtered |
+| GET | `/api/view/transaction/{id}` | Everything known about one charge, including the bank's fuller description and the line it arrived on |
 | GET | `/api/view/unfiled` | Rows with no category yet |
 | GET | `/api/view/ledger` | The full hierarchical ledger view |
 | GET | `/api/view/transfers` | Linked transfers and candidate pairs |
@@ -136,5 +137,5 @@ For an external scheduler. Closed unless you set an ingest key, and it opens no 
 
 ---
 
-75 routes.
+76 routes.
 Regenerate with `./scripts/gen-api-doc.py`.

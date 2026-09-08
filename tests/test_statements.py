@@ -378,3 +378,29 @@ def test_a_split_made_from_an_imported_row_goes_too(conn, book):
     st.revert_batch(conn, bid)
     assert conn.execute("SELECT COUNT(*) FROM transactions"
                         " WHERE deleted=0").fetchone()[0] == 0
+
+
+def test_sgml_entities_are_decoded(tmp_path):
+    """OFX is SGML, so a bank writes "Harbour Coffee &amp; Bun".
+
+    Left alone the entity reaches the screen intact, and reaches norm_payee,
+    which strips the punctuation and leaves "amp" behind as a word the
+    similarity matcher treats as part of the merchant's name.
+    """
+    ofx = (
+        "<OFX><STMTTRN><TRNTYPE>DEBIT</TRNTYPE>"
+        "<DTPOSTED>20260626120000.000</DTPOSTED><TRNAMT>-12.50</TRNAMT>"
+        "<FITID>abc123</FITID><NAME>Harbour Coffee &amp; Bun</NAME>"
+        "<MEMO>National Trust &amp; Gardens &lt;TPW&gt;</MEMO>"
+        "</STMTTRN></OFX>")
+    rows, _ = st.parse_ofx(ofx)
+    assert rows[0]["payee"] == "Harbour Coffee & Bun"
+    assert rows[0]["notes"] == "National Trust & Gardens <TPW>"
+    assert "amp" not in rows[0]["payee_norm"].split()
+
+
+def test_a_payee_with_no_entity_is_untouched(tmp_path):
+    ofx = ("<OFX><STMTTRN><DTPOSTED>20260626</DTPOSTED><TRNAMT>-1.00</TRNAMT>"
+           "<FITID>x</FITID><NAME>Plain Shop</NAME></STMTTRN></OFX>")
+    rows, _ = st.parse_ofx(ofx)
+    assert rows[0]["payee"] == "Plain Shop"

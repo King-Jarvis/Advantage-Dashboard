@@ -36,6 +36,7 @@ const state = {
   // because the tree is rebuilt on every change and anything stored on it
   // would be lost exactly when the screen re-drew.
   open: new Set(),
+  detail: null, detailFor: null,
 };
 
 function monthLabel(m) {
@@ -91,7 +92,7 @@ function accountOptions(selected) {
   });
 }
 
-function row(r, reload) {
+function row(r, reload, rerender) {
   const cat = el("select", { class: "input", "aria-label": "Category" },
     ...categoryOptions(r.category_id));
   const acct = el("select", { class: "input", "aria-label": "Account" },
@@ -116,7 +117,9 @@ function row(r, reload) {
     acct.disabled = true;
   }
 
-  return el("div", { class: "lrow" },
+  const open = state.detailFor === r.id;
+
+  return el("div", { class: `lrow${open ? " open" : ""}` },
     state.deleting
       ? el("button", { class: "iconbtn danger", type: "button", text: "🗑",
           "aria-label": `Delete ${r.payee || "this transaction"}`,
@@ -136,10 +139,103 @@ function row(r, reload) {
           } })
       : null,
     el("span", { class: "lrow-date", text: r.date.slice(5) }),
-    el("span", { class: "lrow-payee grow", text: r.payee || "—" }),
+    // The payee is the button. The list can only show the bank's truncated
+    // NAME, so "what actually was this?" needs somewhere to be answered.
+    el("button", {
+      class: "btn ghost lrow-payee grow", type: "button",
+      "aria-expanded": open ? "true" : "false",
+      title: r.payee || "",
+      text: r.payee || "—",
+      onclick: () => showDetail(open ? null : r.id, rerender),
+    }),
     r.is_split_part ? el("span", { class: "pill", text: "part of a split" }) : null,
     moneyEl(r.amount_cents, "lrow-amt"),
-    cat, acct);
+    cat, acct,
+    open ? detailPanel() : null);
+}
+
+/* What the bank actually sent.
+ *
+ * Fetched per row rather than carried in the tree: the tree is fifteen
+ * hundred rows and this is wanted for one of them at a time. */
+async function showDetail(id, rerender) {
+  state.detailFor = id;
+  state.detail = null;
+  // rerender, not reload: reload re-fetches the whole tree, and opening one
+  // row is not a reason to ask the server for fifteen hundred others.
+  rerender();
+  if (!id) return;
+  try {
+    state.detail = await get(`/api/view/transaction/${id}`);
+  } catch (e) {
+    state.error = (e && e.message) || "Could not load that charge.";
+  }
+  rerender();
+}
+
+function fact(label, value) {
+  if (value === null || value === undefined || value === "") return null;
+  return el("div", { class: "lfact" },
+    el("span", { class: "lfact-k", text: label }),
+    el("span", { class: "lfact-v", text: String(value) }));
+}
+
+function detailPanel() {
+  const d = state.detail;
+  if (!d) return el("div", { class: "ldetail" },
+    el("span", { class: "hint", text: "Loading…" }));
+
+  const bits = [];
+
+  // The full title first, because it is the reason this screen exists. Only
+  // when it says more than the row already does.
+  if (d.description && d.description !== d.payee) {
+    bits.push(el("div", { class: "ldetail-title" },
+      el("span", { class: "lfact-k", text: "as the bank sent it" }),
+      el("div", { class: "ldetail-full", text: d.description })));
+  }
+
+  bits.push(el("div", { class: "lfacts" },
+    fact("date", d.date),
+    fact("amount", money(d.amount_cents)),
+    fact("account", d.account + (d.on_budget ? "" : " (off budget)")),
+    fact("category", d.category
+      ? `${d.category}${d.group ? ` · ${d.group}` : ""}` : "none"),
+    fact("filed by", { you: "you", model: "the model",
+                       history: "how it was filed before",
+                       similar: "resemblance to another merchant"
+                     }[d.category_source] || (d.category ? "before this was recorded" : "")),
+    fact("matched as", d.payee_norm),
+    fact("cleared", d.reconciled ? "reconciled" : d.cleared ? "yes" : "no")));
+
+  if (d.transfer_with) {
+    bits.push(el("div", { class: "hint",
+      text: `Half of a transfer with ${d.transfer_with.account} on `
+          + `${d.transfer_with.date} (${money(d.transfer_with.amount_cents)}).` }));
+  }
+  if (d.split_of) {
+    bits.push(el("div", { class: "hint",
+      text: `Part of a split of ${money(d.split_of.amount_cents)} on `
+          + `${d.split_of.date}.` }));
+  }
+  if (d.split_parts) {
+    bits.push(el("div", { class: "hint",
+      text: `Split into ${d.split_parts.length} parts: `
+          + d.split_parts.map((x) =>
+              `${x.category || "uncategorised"} ${money(x.amount_cents)}`)
+            .join(", ") }));
+  }
+
+  if (d.import) {
+    bits.push(el("details", { class: "legend" },
+      el("summary", { text: `From ${d.import.filename}, line ${d.import.line_no}` }),
+      el("div", { class: "ldetail-raw", text: d.import.raw || "(not kept)" })));
+  } else {
+    bits.push(el("div", { class: "hint",
+      text: d.source === "manual" ? "Entered by hand." : "No statement line kept." }));
+  }
+
+  return el("div", { class: "ldetail" }, ...bits);
 }
 
 /* A folding level. Searching forces it open: a hit buried inside something
@@ -254,7 +350,7 @@ export async function ledgerView(container, { month, onBack } = {}) {
           grpCount += rows.length;
           grpTotal += total;
           catNodes.push(fold(`${a.id}/${g.id}/${c.id}`, c.name, rows.length,
-                             total, rows.map((r) => row(r, reload)), "lcat"));
+                             total, rows.map((r) => row(r, reload, render)), "lcat"));
         }
         if (!catNodes.length) continue;
         acctCount += grpCount;
