@@ -337,7 +337,12 @@ def upsert_messages(conn, account_id, messages):
         unread_now = 1 if m.get("is_unread", True) else 0
         if row:
             read_at = row["read_at"] or ""
-            if not unread_now and row["is_unread"]:
+            # Stamped on the transition, and also whenever a read message is
+            # found without one. The second case is not hypothetical: every
+            # message already stored when the column was added is read with
+            # no timestamp, and a rule that only fires on the transition
+            # would exempt all of them for ever.
+            if not unread_now and (row["is_unread"] or not read_at):
                 read_at = _now()
             elif unread_now:
                 read_at = ""

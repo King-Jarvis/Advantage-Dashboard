@@ -664,3 +664,17 @@ def test_retiring_hides_but_never_deletes(conn, acct):
     assert feeds.inbox(conn, min_importance=0, read_days=7) == []
     assert conn.execute("SELECT COUNT(*) n FROM messages WHERE deleted=0"
                         ).fetchone()["n"] == 1
+
+
+def test_a_read_message_with_no_timestamp_gets_one(conn, acct):
+    """Everything stored before the column existed is in exactly this state.
+
+    A rule that only fires on the unread-to-read transition would exempt all
+    of it for ever, which is the quiet way a retention setting does nothing.
+    """
+    mid = _msg(conn, acct, "m1", unread=0)
+    conn.execute("UPDATE messages SET read_at='' WHERE id=?", (mid,))
+    conn.commit()
+    _msg(conn, acct, "m1", unread=0)          # next sync sees it again
+    assert conn.execute("SELECT read_at FROM messages WHERE id=?",
+                        (mid,)).fetchone()["read_at"] != ""
