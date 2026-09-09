@@ -36,6 +36,8 @@ PURPOSE = {
     "settings": "Read settings, or change them. Secrets are write-only",
     "setting": "Clear one setting",
     "accounts": "Ledger accounts: list, or create",
+    "account": "Correct an account -- its name, where it sits, or the"
+               " balance it started from",
     "catall": "Categorise every unfiled row, deduplicated by merchant",
     "budget": "The month's envelopes, activity and balances",
     "suggest": "Suggested budget figures from your own statement history",
@@ -99,7 +101,7 @@ GROUPS = [
     ("Edit", "session + CSRF",
      "Every mutation needs the `X-CSRF-Token` header from login.",
      ["evnew", "evedit", "editmsg", "fileone", "filemany", "split", "xferlink",
-      "setbudget", "movemoney", "cats", "cat", "groups", "accounts",
+      "setbudget", "movemoney", "cats", "cat", "groups", "accounts", "account",
       "catall", "saveflex"]),
     ("Import", "session + CSRF",
      "A statement is parsed and staged for review; nothing reaches the ledger "

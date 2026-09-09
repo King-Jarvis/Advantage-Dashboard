@@ -75,6 +75,8 @@ ROUTES = [
     ("setting",  {"DELETE"},
      re.compile(r"^/api/settings/([a-z_]{3,40})$"), "session"),
     ("accounts", {"GET", "POST"}, re.compile(r"^/api/accounts$"),          "session"),
+    ("account",  {"PATCH"},
+     re.compile(r"^/api/accounts/([0-9a-f]{32})$"),                        "session"),
     ("catall",   {"POST"},        re.compile(r"^/api/categorize$"),        "session"),
     ("budget",   {"GET"},         re.compile(r"^/api/view/budget$"),       "session"),
     ("suggest",  {"GET"},         re.compile(r"^/api/view/suggestions$"),  "session"),
@@ -456,7 +458,8 @@ class Handler(BaseHTTPRequestHandler):
         from . import ledger
         if self.command == "GET":
             rows = conn.execute(
-                "SELECT id, name, type, on_budget, closed FROM accounts"
+                "SELECT id, name, type, on_budget, closed,"
+                "       opening_balance_cents FROM accounts"
                 " ORDER BY name").fetchall()
             return self.json_out({"accounts": [
                 dict(r) | {"balance_cents": ledger.account_balance(conn, r["id"])}
@@ -465,10 +468,40 @@ class Handler(BaseHTTPRequestHandler):
         name = str(data.get("name", "")).strip()
         if not name:
             raise ValueError("name is required")
+        opening = data.get("opening_balance_cents", 0)
+        if not isinstance(opening, int):
+            raise ValueError("opening_balance_cents must be whole pence")
         aid = ledger.create_account(conn, name,
                                     type=str(data.get("type", "checking")),
-                                    on_budget=bool(data.get("on_budget", True)))
+                                    on_budget=bool(data.get("on_budget", True)),
+                                    opening_balance_cents=opening)
         self.json_out({"id": aid}, 201)
+
+    def api_account(self, conn, session, account_id):
+        """Correct an account: its name, where it sits, where it started."""
+        from . import ledger
+        data = self.body_json()
+        fields = {}
+        if "name" in data:
+            name = str(data["name"]).strip()
+            if not name:
+                raise ValueError("name cannot be empty")
+            fields["name"] = name
+        if "on_budget" in data:
+            fields["on_budget"] = bool(data["on_budget"])
+        if "closed" in data:
+            fields["closed"] = bool(data["closed"])
+        if "opening_balance_cents" in data:
+            v = data["opening_balance_cents"]
+            if not isinstance(v, int):
+                raise ValueError("opening_balance_cents must be whole pence")
+            fields["opening_balance_cents"] = v
+        try:
+            ledger.update_account(conn, account_id, **fields)
+        except KeyError:
+            return self.fail(404, "no such account")
+        self.json_out({"id": account_id,
+                       "balance_cents": ledger.account_balance(conn, account_id)})
 
     def api_catall(self, conn, session):
         """Categorise everything still uncategorised.
@@ -1174,9 +1207,24 @@ class Handler(BaseHTTPRequestHandler):
                 "sample_months": a.get("sample_months", 0),
             })
 
+        # What is in the bank, and where the month lands if the budget is
+        # kept. Separate from to_be_budgeted, which is about assigning money
+        # rather than having it.
+        projection = ledger.month_projection(conn, month)
+        unset = conn.execute(
+            "SELECT COUNT(*) n FROM accounts"
+            " WHERE on_budget=1 AND closed=0 AND opening_balance_cents=0"
+        ).fetchone()["n"]
+
         self.json_out({
             "month": month,
             "to_be_budgeted_cents": ledger.to_be_budgeted(conn, month),
+            "savings": projection | {
+                # A balance built only from imported rows is a fact about the
+                # import, not the account. Said out loud, because the figure
+                # looks equally confident either way.
+                "accounts_without_opening": unset,
+            },
             "budgeted_total_cents": sum(i["budgeted"] for i in items),
             "estimate_total_cents": sum(i["estimate"] for i in items),
             "typical_total_cents": sum(i["typical"] for i in items),

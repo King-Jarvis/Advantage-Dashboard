@@ -2429,3 +2429,77 @@ def test_an_untouched_envelope_ranks_last_among_budgeted(live):
     _, _, body = call(live, "GET", "/api/view/home", headers={"Cookie": cookie})
     names = [c["name"] for c in body["budget"]["top"]]
     assert names[-1] == "Untouched"
+
+
+# ── starting balances and the savings figure ──────────────────────────────
+def test_setting_a_starting_balance_needs_csrf(live):
+    cookie, _ = login(live)
+    from dashboard import ledger, storage
+    conn = storage.connect()
+    acct = ledger.create_account(conn, "Checking")
+    conn.close()
+    status, _, _ = call(live, "PATCH", f"/api/accounts/{acct}",
+                        {"opening_balance_cents": 100},
+                        headers={"Cookie": cookie})
+    assert status == 403
+
+
+def test_a_starting_balance_moves_the_reported_balance(live):
+    cookie, csrf = login(live)
+    from dashboard import ledger, storage
+    conn = storage.connect()
+    acct = ledger.create_account(conn, "Checking")
+    ledger.add_transaction(conn, acct, "2026-01-05", -150_00, "Out")
+    conn.close()
+    hdrs = {"Cookie": cookie, "X-CSRF-Token": csrf}
+    status, _, body = call(live, "PATCH", f"/api/accounts/{acct}",
+                           {"opening_balance_cents": 500_00}, headers=hdrs)
+    assert status == 200
+    assert body["balance_cents"] == 350_00
+
+
+def test_a_fractional_starting_balance_is_refused(live):
+    """Money is whole pence everywhere in this application."""
+    cookie, csrf = login(live)
+    from dashboard import ledger, storage
+    conn = storage.connect()
+    acct = ledger.create_account(conn, "Checking")
+    conn.close()
+    status, _, _ = call(live, "PATCH", f"/api/accounts/{acct}",
+                        {"opening_balance_cents": 12.5},
+                        headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+    assert status == 400
+
+
+def test_an_unknown_account_is_a_404(live):
+    cookie, csrf = login(live)
+    status, _, _ = call(live, "PATCH", "/api/accounts/" + "c" * 32,
+                        {"name": "X"},
+                        headers={"Cookie": cookie, "X-CSRF-Token": csrf})
+    assert status == 404
+
+
+def test_the_overview_reports_what_is_in_the_bank(live):
+    cookie, _ = login(live)
+    from dashboard import ledger, storage
+    conn = storage.connect()
+    ledger.create_account(conn, "Checking", opening_balance_cents=1000_00)
+    ledger.create_account(conn, "Brokerage", on_budget=False,
+                          opening_balance_cents=50_000_00)
+    conn.close()
+    _, _, body = call(live, "GET", "/api/view/overview?month=2026-08",
+                      headers={"Cookie": cookie})
+    assert body["savings"]["now_cents"] == 1000_00, "tracking money excluded"
+    assert body["savings"]["accounts_without_opening"] == 0
+
+
+def test_the_overview_says_when_a_starting_balance_is_missing(live):
+    """The figure looks equally confident either way, so the gap is stated."""
+    cookie, _ = login(live)
+    from dashboard import ledger, storage
+    conn = storage.connect()
+    ledger.create_account(conn, "Checking")
+    conn.close()
+    _, _, body = call(live, "GET", "/api/view/overview?month=2026-08",
+                      headers={"Cookie": cookie})
+    assert body["savings"]["accounts_without_opening"] == 1

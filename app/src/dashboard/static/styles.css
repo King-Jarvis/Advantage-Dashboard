@@ -624,6 +624,12 @@ a:hover { text-decoration: underline; }
    than something to be inferred from seven unlabelled bars. */
 .minihead { margin-bottom: var(--s1); }
 
+/* The arithmetic behind the savings figure, and the warning that it is built
+   on imports alone. Under the stat row rather than inside it: they explain
+   the number, they are not another one. */
+.stat-row + .hint { margin-top: var(--s3); }
+.warnline { color: var(--warn); }
+
 /* What the read-retention filter is holding back, and the way to see it.
    Separated from the list by a rule rather than styled as another message:
    it is a statement about the list, not a member of it. */

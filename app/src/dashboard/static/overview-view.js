@@ -9,12 +9,6 @@ import { get } from "./api.js";
 import { el, money, moneyEl, mount } from "./dom.js";
 import { budgetChart } from "./budget-chart.js";
 
-function toneFor(cents) {
-  if (cents === 0) return { cls: "ok", says: "Every pound has a job" };
-  if (cents > 0) return { cls: "warn", says: "Waiting to be assigned" };
-  return { cls: "danger", says: "Assigned more than you have" };
-}
-
 function stat(label, node) {
   return el("div", { class: "stat" },
     el("span", { class: "stat-label", text: label }), node);
@@ -35,9 +29,52 @@ function monthNav(month, onMonth) {
   ];
 }
 
+/* Kept across renders so toggling the projection does not re-fetch, and so
+ * the choice survives paging between months. */
+let projecting = false;
+
 export async function overviewView(container, month, { onMonth, onEdit }) {
   const d = await get(`/api/view/overview?month=${encodeURIComponent(month)}`);
-  const tone = toneFor(d.to_be_budgeted_cents);
+  const sv = d.savings || {};
+
+  /* What is in the bank, and where the month ends up if the budget holds.
+   *
+   * This screen is for reading; "to be budgeted" is a control for assigning
+   * money and belongs where the assigning happens, so it lives on the edit
+   * screen now. What you want to know from here is whether you are keeping
+   * any of it. */
+  const shown = projecting ? (sv.projected_cents ?? 0) : (sv.now_cents ?? 0);
+  const savingsTone = shown < 0 ? "danger" : shown > 0 ? "ok" : "warn";
+
+  const toggle = el("button", {
+    class: "btn ghost", type: "button",
+    "aria-pressed": projecting ? "true" : "false",
+    text: projecting ? "Showing end of month" : "Project end of month",
+    onclick: () => {
+      projecting = !projecting;
+      return overviewView(container, month, { onMonth, onEdit });
+    },
+  });
+
+  const workings = projecting
+    ? el("div", { class: "hint" },
+        `${money(sv.now_cents ?? 0)} now `
+        + `+ ${money(sv.income_incoming_cents ?? 0)} still to come `
+        + `− ${money(sv.outstanding_budget_cents ?? 0)} budget left to spend`
+        + (sv.confident ? "" : " · too little history to trust the income"))
+    : el("div", { class: "hint" },
+        `${money(sv.income_received_cents ?? 0)} in this month so far`);
+
+  // A balance built only from imported rows is a fact about the import, not
+  // about the account. The figure looks equally confident either way, so the
+  // gap has to be stated rather than left to be discovered.
+  const needsOpening = (sv.accounts_without_opening || 0) > 0
+    ? el("div", { class: "hint warnline" },
+        `${sv.accounts_without_opening} account`
+        + `${sv.accounts_without_opening === 1 ? " has" : "s have"} no starting `
+        + "balance, so this counts only what has been imported. Set it on the "
+        + "Import screen.")
+    : null;
 
   const legend = el("div", { class: "legend" },
     el("span", { class: "key" },
@@ -66,10 +103,12 @@ export async function overviewView(container, month, { onMonth, onEdit }) {
                      text: "Edit budget", onclick: () => onEdit(null) })),
     el("div", { class: "node-body" },
       el("div", { class: "stat-row" },
-        stat("to be budgeted",
+        stat(projecting ? "saved by month end" : "in the bank now",
           el("div", { class: "row" },
-            moneyEl(d.to_be_budgeted_cents, "hero"),
-            el("span", { class: `pill ${tone.cls}`, text: tone.says }))),
+            moneyEl(shown, "hero"),
+            el("span", { class: `pill ${savingsTone}`,
+                         text: shown < 0 ? "short" : "unspent" }),
+            toggle)),
         stat("budgeted", el("span", { class: "money big",
                                       text: money(d.budgeted_total_cents) })),
         stat("spent so far", el("span", { class: "money big",
@@ -77,7 +116,9 @@ export async function overviewView(container, month, { onMonth, onEdit }) {
         stat("estimated", el("span", { class: "money big muted",
                                        text: money(d.estimate_total_cents) })),
         stat("recommended", el("span", { class: "money big muted",
-                                         text: money(d.recommended_total_cents) })))));
+                                         text: money(d.recommended_total_cents) }))),
+      workings,
+      needsOpening));
 
   const graph = el("section", { class: "node", dataset: { kind: "budget" } },
     el("header", { class: "node-head" },

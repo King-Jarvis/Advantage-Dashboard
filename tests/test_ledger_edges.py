@@ -515,3 +515,121 @@ def test_a_memo_exclusion_also_keeps_it_out_of_pairing(conn, book):
                            "Deposit Internet Banking")
     assert len(ledger.transfer_candidates(conn)) == 1
     assert ledger.transfer_candidates(conn, exclude=TERMS) == []
+
+
+# ── what is actually in the account ───────────────────────────────────────
+def test_a_balance_starts_from_where_the_account_started(conn):
+    """Without an opening balance a balance is the net of what was imported.
+
+    That is a fact about the import, not about the account -- and it is how a
+    savings account that has never been overdrawn shows minus twelve hundred
+    pounds once a statement covering only spending is loaded.
+    """
+    acct = ledger.create_account(conn, "Savings", opening_balance_cents=2000_00)
+    ledger.add_transaction(conn, acct, "2026-01-05", -150_00, "Moved out")
+    assert ledger.account_balance(conn, acct) == 1850_00
+
+
+def test_an_opening_balance_can_be_corrected_afterwards(conn):
+    acct = ledger.create_account(conn, "Savings")
+    ledger.add_transaction(conn, acct, "2026-01-05", -150_00, "Moved out")
+    assert ledger.account_balance(conn, acct) == -150_00
+    ledger.update_account(conn, acct, opening_balance_cents=500_00)
+    assert ledger.account_balance(conn, acct) == 350_00
+
+
+def test_an_opening_balance_must_be_whole_pence(conn):
+    with pytest.raises(TypeError):
+        ledger.create_account(conn, "X", opening_balance_cents=12.5)
+    acct = ledger.create_account(conn, "Y")
+    with pytest.raises(TypeError):
+        ledger.update_account(conn, acct, opening_balance_cents=1.5)
+
+
+def test_cash_on_hand_ignores_tracking_accounts(conn):
+    """Money in a brokerage is not money about to be spent. Counting it makes
+    the figure describe net worth rather than what is available."""
+    ledger.create_account(conn, "Checking", opening_balance_cents=100_00)
+    ledger.create_account(conn, "Brokerage", on_budget=False,
+                          opening_balance_cents=90_000_00)
+    assert ledger.cash_on_hand(conn) == 100_00
+
+
+def test_cash_on_hand_ignores_split_children(conn):
+    """The parent already carries the money; counting both doubles it."""
+    acct = ledger.create_account(conn, "Checking", opening_balance_cents=100_00)
+    grp = ledger.create_category_group(conn, "Everyday")
+    a = ledger.create_category(conn, grp, "A")
+    b = ledger.create_category(conn, grp, "B")
+    tid = ledger.add_transaction(conn, acct, "2026-01-05", -40_00, "Shop")
+    ledger.split_transaction(conn, tid, [(a, -25_00), (b, -15_00)])
+    assert ledger.cash_on_hand(conn) == 60_00
+
+
+# ── where the month ends up ───────────────────────────────────────────────
+def _income_history(conn, acct, cat, amounts, end="2025-08"):
+    from dashboard import stats
+    ms = stats.month_range(end, len(amounts))
+    for m in ms:
+        conn.execute(
+            "INSERT OR REPLACE INTO month_coverage (account_id, month,"
+            " txn_count, first_day, last_day) VALUES (?,?,?,?,?)",
+            (acct, m, 1, m + "-01", m + "-28"))
+    conn.commit()
+    for m, a in zip(ms, amounts, strict=True):
+        if a:
+            ledger.add_transaction(conn, acct, "%s-01" % m, a, "Pay", cat)
+    return ms
+
+
+def test_the_projection_adds_income_still_to_come(conn, book):
+    _income_history(conn, book["checking"], book["salary"],
+                    [2000_00, 2000_00, 2000_00])
+    p = ledger.month_projection(conn, "2025-08")
+    # August already received 2000, and 2000 is the usual month.
+    assert p["income_received_cents"] == 2000_00
+    assert p["income_incoming_cents"] == 0
+
+
+def test_a_month_paid_less_than_usual_still_expects_the_rest(conn, book):
+    _income_history(conn, book["checking"], book["salary"],
+                    [2000_00, 2000_00, 500_00])
+    p = ledger.month_projection(conn, "2025-08")
+    assert p["income_received_cents"] == 500_00
+    assert p["income_incoming_cents"] > 0
+
+
+def test_a_month_paid_more_than_usual_expects_nothing_back(conn, book):
+    """A month already ahead is not about to claw it back."""
+    _income_history(conn, book["checking"], book["salary"],
+                    [1000_00, 1000_00, 9000_00])
+    p = ledger.month_projection(conn, "2025-08")
+    assert p["income_incoming_cents"] == 0
+
+
+def test_an_overspent_category_does_not_fund_another(conn, book):
+    """The overspend already happened and is already in the balance.
+
+    Letting it net off would count it twice: once as money gone, and again as
+    money still available to spend.
+    """
+    ledger.set_budget(conn, "2025-08", book["groceries"], 100_00)
+    ledger.set_budget(conn, "2025-08", book["fuel"], 100_00)
+    ledger.add_transaction(conn, book["checking"], "2025-08-05", -300_00,
+                           "Shop", book["groceries"])
+    p = ledger.month_projection(conn, "2025-08")
+    # Fuel's untouched 100 only; groceries contributes nothing, not minus 200.
+    assert p["outstanding_budget_cents"] == 100_00
+
+
+def test_the_projection_is_its_own_arithmetic(conn, book):
+    ledger.set_budget(conn, "2025-08", book["groceries"], 100_00)
+    p = ledger.month_projection(conn, "2025-08")
+    assert p["projected_cents"] == (p["now_cents"]
+                                    + p["income_incoming_cents"]
+                                    - p["outstanding_budget_cents"])
+
+
+def test_the_projection_says_when_it_has_too_little_history(conn, book):
+    _income_history(conn, book["checking"], book["salary"], [2000_00, 2000_00])
+    assert ledger.month_projection(conn, "2025-08")["confident"] is False

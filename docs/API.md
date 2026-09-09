@@ -76,6 +76,7 @@ Every mutation needs the `X-CSRF-Token` header from login.
 | PATCH \| DELETE | `/api/categories/{id}` | Rename, move, hide or delete a category |
 | GET \| POST | `/api/category-groups` | Category groups: list, or create |
 | GET \| POST | `/api/accounts` | Ledger accounts: list, or create |
+| PATCH | `/api/accounts/{id}` | Correct an account -- its name, where it sits, or the balance it started from |
 | POST | `/api/categorize` | Categorise every unfiled row, deduplicated by merchant |
 | PATCH | `/api/savings/flexibility/{id}` | How movable a category is, which decides whether its target may sit below its forecast |
 
@@ -127,5 +128,5 @@ For an external scheduler. Closed unless you set an ingest key, and it opens no 
 
 ---
 
-73 routes.
+74 routes.
 Regenerate with `./scripts/gen-api-doc.py`.

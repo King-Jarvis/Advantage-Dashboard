@@ -9,7 +9,8 @@
  * is not to import; including one is a decision someone makes on purpose.
  */
 import { api, del, get, patch, post } from "./api.js";
-import { el, keepingPlace, money, moneyEl, mount } from "./dom.js";
+import { el, keepingPlace, money, moneyEl, mount, parseMoney }
+  from "./dom.js";
 
 const state = {
   accounts: [], categories: [], coverage: null, pending: [],
@@ -694,7 +695,70 @@ export async function importView(container, { onDone } = {}) {
                   + "that could not be read start excluded." })
           : null));
 
-    const coverageCard = el("section", { class: "node", dataset: { kind: "budget" } },
+    /* Where each account started.
+   *
+   * A balance is otherwise the net of whatever happened to be imported --
+   * which is how a savings account that has never been overdrawn shows minus
+   * twelve hundred pounds, and why the savings figure on the budget screen
+   * cannot be trusted until these are set. It is the closing balance on the
+   * statement before the first one you imported. */
+  function openingCard() {
+    const rows = state.accounts.filter((a) => a.on_budget).map((a) => {
+      const box = el("input", {
+        class: "input amount", type: "text", inputmode: "decimal",
+        value: money(a.opening_balance_cents || 0),
+        "aria-label": `Starting balance for ${a.name}`,
+      });
+      async function commit() {
+        const cents = parseMoney(box.value);
+        if (cents === null || cents === (a.opening_balance_cents || 0)) {
+          box.value = money(a.opening_balance_cents || 0);
+          return;
+        }
+        try {
+          await patch(`/api/accounts/${a.id}`,
+                      { opening_balance_cents: cents });
+          state.note = `Set the starting balance for ${a.name}.`;
+        } catch (e) {
+          state.error = (e && e.message) || "Could not save that.";
+        }
+        return refresh();
+      }
+      box.addEventListener("blur", commit);
+      box.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); box.blur(); }
+        if (e.key === "Escape") {
+          box.value = money(a.opening_balance_cents || 0);
+          box.blur();
+        }
+      });
+      return el("div", { class: "xfer-row" },
+        el("span", { class: "grow", text: a.name }),
+        el("span", { class: "hint", text: "now" }),
+        moneyEl(a.balance_cents || 0, "xfer-amt"),
+        box);
+    });
+    if (!rows.length) return null;
+    const missing = state.accounts.filter(
+      (a) => a.on_budget && !a.opening_balance_cents).length;
+    return el("section", { class: "node", dataset: { kind: "budget" } },
+      el("header", { class: "node-head" },
+        el("span", { class: "node-title", text: "Starting balances" }),
+        el("div", { class: "spacer" }),
+        missing
+          ? el("span", { class: "pill warn", text: `${missing} not set` })
+          : el("span", { class: "pill ok", text: "all set" })),
+      el("div", { class: "node-body" },
+        el("div", { class: "hint",
+          text: "What was in each account before the first statement you "
+              + "imported — the closing balance on the one before it. Without "
+              + "it a balance is only the net of what has been imported, and "
+              + "the savings figure on the budget screen counts from the "
+              + "wrong place." }),
+        ...rows));
+  }
+
+  const coverageCard = el("section", { class: "node", dataset: { kind: "budget" } },
       el("header", { class: "node-head" },
         el("span", { class: "node-title", text: "Months covered" })),
       el("div", { class: "node-body" }, coverageStrip(state.coverage)));
@@ -792,6 +856,8 @@ export async function importView(container, { onDone } = {}) {
       el("div", { class: "node-body" }, histDetails));
 
     parts.push(unfiledCard, xferCard, histCard, coverageCard);
+    const opening = openingCard();
+    if (opening) parts.push(opening);
     mount(container, ...parts);
   }
 

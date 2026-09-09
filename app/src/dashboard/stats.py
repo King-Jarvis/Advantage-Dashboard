@@ -412,6 +412,51 @@ def _fmt(cents):
     return "%d.%02d" % divmod(abs(int(cents)), 100)
 
 
+def income_by_month(conn, months):
+    """Money in, per month, as a positive figure.
+
+    monthly_spend negates: it answers "what did this cost", so income comes
+    back below zero. Flipping it here rather than teaching that function two
+    meanings, because a function that returns a sign depending on the
+    category is one nobody can read a call site of.
+    """
+    if not months:
+        return {}
+    marks = ",".join("?" * len(months))
+    rows = conn.execute(
+        "SELECT substr(t.date,1,7) m, SUM(t.amount_cents) total"
+        " FROM transactions t"
+        " JOIN accounts a ON a.id = t.account_id"
+        " JOIN categories c ON c.id = t.category_id"
+        " WHERE t.deleted=0 AND a.on_budget=1 AND c.is_income=1"
+        "   AND substr(t.date,1,7) IN (%s) GROUP BY 1" % marks,
+        list(months)).fetchall()
+    found = {r["m"]: max(0, r["total"]) for r in rows}
+    return {m: found.get(m, 0) for m in months}
+
+
+def income_forecast(conn, end_month=None, window=WINDOW_MONTHS):
+    """What a month's income usually is, and what this one is heading for.
+
+    Not routed through analyse(). classify() calls a category active only
+    where its monthly figure is positive, and income's are negative by that
+    function's convention -- so every income category came back "unused",
+    with no forecast at all. Bending the classifier to handle both signs
+    would make every branch in it ask which kind it was looking at; income
+    only needs the two averages, so it takes them directly.
+    """
+    months = covered_months(conn, end_month=end_month, window=window)
+    by_month = income_by_month(conn, months)
+    values = [by_month[m] for m in months]
+    return {
+        "months": months,
+        "by_month": by_month,
+        "typical_cents": trimmed_mean(values),
+        "estimate_cents": recency_weighted(months, by_month),
+        "enough": len(months) >= MIN_MONTHS,
+    }
+
+
 def analyse_all(conn, end_month=None, window=WINDOW_MONTHS):
     """Every budgetable category, most significant first."""
     cats = conn.execute(

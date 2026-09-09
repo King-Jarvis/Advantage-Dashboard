@@ -49,12 +49,16 @@ def _audit(conn, action, entity_type, entity_id, detail="", actor="system"):
 # ═══════════════════════════════════════════════════════════════════════════
 #  Accounts and categories
 # ═══════════════════════════════════════════════════════════════════════════
-def create_account(conn, name, type="checking", on_budget=True):
+def create_account(conn, name, type="checking", on_budget=True,
+                   opening_balance_cents=0):
+    if not isinstance(opening_balance_cents, int):
+        raise TypeError("opening_balance_cents must be int (cents)")
     aid = new_id()
     conn.execute(
-        "INSERT INTO accounts (id, name, type, on_budget, created_at)"
-        " VALUES (?,?,?,?,?)",
-        (aid, name, type, 1 if on_budget else 0, _now()))
+        "INSERT INTO accounts (id, name, type, on_budget, created_at,"
+        " opening_balance_cents) VALUES (?,?,?,?,?,?)",
+        (aid, name, type, 1 if on_budget else 0, _now(),
+         opening_balance_cents))
     _audit(conn, "create", "account", aid, name)
     conn.commit()
     return aid
@@ -458,15 +462,49 @@ def update_transaction(conn, txn_id, **fields):
 # ═══════════════════════════════════════════════════════════════════════════
 #  Balances
 # ═══════════════════════════════════════════════════════════════════════════
+def update_account(conn, account_id, **fields):
+    """Rename an account, move it off budget, or correct where it started."""
+    allowed = {"name", "type", "on_budget", "closed", "opening_balance_cents"}
+    bad = set(fields) - allowed
+    if bad:
+        raise ValueError("cannot update: %s" % ", ".join(sorted(bad)))
+    if not fields:
+        raise ValueError("nothing to change")
+    if "opening_balance_cents" in fields and not isinstance(
+            fields["opening_balance_cents"], int):
+        raise TypeError("opening_balance_cents must be int (cents)")
+    if conn.execute("SELECT 1 FROM accounts WHERE id=?",
+                    (account_id,)).fetchone() is None:
+        raise KeyError(account_id)
+    sets = ", ".join("%s=?" % k for k in fields)
+    values = [int(v) if k in ("on_budget", "closed") else v
+              for k, v in fields.items()]
+    conn.execute("UPDATE accounts SET %s WHERE id=?" % sets,
+                 [*values, account_id])
+    _audit(conn, "update", "account", account_id, ",".join(sorted(fields)))
+    conn.commit()
+
+
 def account_balance(conn, account_id, as_of=None):
-    """Sum of top-level rows. Split children are excluded by parent_id."""
+    """What is in the account: opening balance plus every top-level row.
+
+    Split children are excluded by parent_id -- their parent already carries
+    the money, and counting both would double it.
+
+    The opening balance is what was there before the first statement. Without
+    it this returns the net of whatever happened to be imported, which is a
+    real number about the import and not about the account.
+    """
     q = ("SELECT COALESCE(SUM(amount_cents),0) b FROM transactions"
          " WHERE account_id=? AND deleted=0 AND parent_id IS NULL")
     args = [account_id]
     if as_of:
         q += " AND date <= ?"
         args.append(as_of)
-    return conn.execute(q, args).fetchone()["b"]
+    moved = conn.execute(q, args).fetchone()["b"]
+    row = conn.execute("SELECT opening_balance_cents FROM accounts WHERE id=?",
+                       (account_id,)).fetchone()
+    return (row["opening_balance_cents"] if row else 0) + moved
 
 
 def category_activity(conn, category_id, month):
@@ -1152,6 +1190,83 @@ def categorise_payee(conn, payee_key, category_id, overwrite=False,
                "categorised %d rows" % n)
     conn.commit()
     return n
+
+
+def cash_on_hand(conn):
+    """What is actually in the budgeted accounts right now.
+
+    Off-budget accounts are excluded for the same reason their spending is:
+    money in a tracking account is not money about to be spent, and counting
+    it here would make the figure describe net worth rather than what is
+    available.
+    """
+    # One query, rather than a balance call per account inside a live
+    # cursor: the inner queries would run on the same connection that is
+    # still walking the outer result.
+    row = conn.execute(
+        "SELECT COALESCE(SUM(a.opening_balance_cents),0)"
+        "     + COALESCE((SELECT SUM(t.amount_cents) FROM transactions t"
+        "                  JOIN accounts x ON x.id = t.account_id"
+        "                 WHERE t.deleted=0 AND t.parent_id IS NULL"
+        "                   AND x.on_budget=1 AND x.closed=0),0) AS total"
+        " FROM accounts a WHERE a.on_budget=1 AND a.closed=0").fetchone()
+    return row["total"] if row else 0
+
+
+def month_projection(conn, month):
+    """Where this month ends up, if the budget is kept.
+
+    Three parts, reported separately because the interesting question is
+    usually which of them is wrong:
+
+      what is in the bank now
+    + the income still expected before the month is out
+    - the budget not yet spent
+
+    Income still expected is the month's usual income less what has already
+    arrived, never below zero: a month that has already paid more than usual
+    is not about to claw it back.
+
+    The outstanding budget is per category and never below zero either. A
+    category already overspent has done its damage, and that damage is
+    already in the bank balance -- letting it net off against a category with
+    room left would count the overspend twice, once as money gone and again
+    as money still available.
+    """
+    from . import stats
+
+    now = cash_on_hand(conn)
+
+    forecast = stats.income_forecast(conn, end_month=month)
+    received = conn.execute(
+        "SELECT COALESCE(SUM(t.amount_cents),0) s FROM transactions t"
+        " JOIN accounts a ON a.id = t.account_id"
+        " JOIN categories c ON c.id = t.category_id"
+        " WHERE t.deleted=0 AND a.on_budget=1 AND c.is_income=1"
+        "   AND substr(t.date,1,7)=?", (month,)).fetchone()["s"]
+    received = max(0, received)
+    incoming = max(0, forecast["estimate_cents"] - received)
+
+    outstanding = 0
+    cats = conn.execute(
+        "SELECT id FROM categories WHERE is_income=0 AND hidden=0").fetchall()
+    for cat in cats:
+        budgeted = get_budget(conn, month, cat["id"])
+        spent = max(0, -category_activity(conn, cat["id"], month))
+        outstanding += max(0, budgeted - spent)
+
+    return {
+        "month": month,
+        "now_cents": now,
+        "income_received_cents": received,
+        "income_expected_cents": forecast["estimate_cents"],
+        "income_incoming_cents": incoming,
+        "outstanding_budget_cents": outstanding,
+        "projected_cents": now + incoming - outstanding,
+        # Below three covered months the income figure is a coincidence, and
+        # a projection built on it should say so rather than be believed.
+        "confident": forecast["enough"],
+    }
 
 
 def to_be_budgeted(conn, month):
