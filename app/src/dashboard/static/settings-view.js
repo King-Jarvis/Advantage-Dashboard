@@ -22,7 +22,8 @@ const GROUPS = [
   ["Budget engine", ["baseline_window_months", "min_months_for_suggestion",
                      "month_start_day", "currency_symbol"]],
   ["Syncing", ["mail_poll_seconds", "calendar_poll_seconds",
-               "inbox_min_importance", "load_remote_images", "timezone"]],
+               "inbox_min_importance", "inbox_read_days",
+               "load_remote_images", "timezone"]],
 ];
 
 const state = { data: null, note: "", error: "" };

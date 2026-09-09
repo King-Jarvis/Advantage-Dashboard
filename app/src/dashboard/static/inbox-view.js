@@ -62,6 +62,9 @@ export async function inboxView(root, state) {
   let all = [];
   let band = state.inboxBand || "all";
   let busy = new Set();
+  let showRetired = false;      // read mail that has aged out of the list
+  let retiredCount = 0;
+  let readDays = 0;
   // Arrives set when a tap on the home page was aiming at one message.
   let openId = state.openMessage || null;
   const bodies = new Map();     // id -> {blocks, body}, so reopening is free
@@ -297,6 +300,23 @@ export async function inboxView(root, state) {
     } else {
       mount(list, ...rows.map(row));
     }
+
+    // Mail that has aged out since you read it. Said out loud with the way
+    // back, because a list quietly showing less than it has is the same
+    // thing as a bug from the outside -- and the count is the only clue
+    // that the setting is doing anything at all.
+    if (retiredCount > 0 || showRetired) {
+      list.append(el("div", { class: "retired-note" },
+        el("span", { class: "hint",
+          text: showRetired
+            ? `Including mail read more than ${readDays} days ago.`
+            : `${retiredCount} read more than ${readDays} days ago `
+              + "and retired from this list." }),
+        el("button", { class: "btn ghost", type: "button",
+          text: showRetired ? "Hide them again" : "Show them",
+          onclick: () => { showRetired = !showRetired; load(); } })));
+    }
+
     // Always say what is not being shown. A filter you cannot see is the same
     // thing as a bug, from the outside.
     const hidden = all.length - rows.length;
@@ -310,7 +330,10 @@ export async function inboxView(root, state) {
     try {
       // Ask for everything and filter here: the server's threshold is a
       // default for the widget, not a cage for this screen.
-      const r = await get("/api/view/inbox?min_importance=0&archived=1");
+      const r = await get("/api/view/inbox?min_importance=0&archived=1"
+                          + (showRetired ? "&retired=1" : ""));
+      retiredCount = r.retired_hidden || 0;
+      readDays = r.read_days || 0;
       all = (r.messages || []).slice().sort((a, b) => {
         const sa = a.importance_override ?? a.importance ?? 0;
         const sb = b.importance_override ?? b.importance ?? 0;

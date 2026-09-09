@@ -306,8 +306,8 @@ def upsert_messages(conn, account_id, messages):
         if not uid or not received:
             continue
         row = conn.execute(
-            "SELECT id, dirty, importance_override FROM messages"
-            " WHERE account_id=? AND source_uid=?",
+            "SELECT id, dirty, importance_override, is_unread, read_at"
+            " FROM messages WHERE account_id=? AND source_uid=?",
             (account_id, uid)).fetchone()
         if row and row["dirty"]:
             skipped += 1
@@ -330,24 +330,43 @@ def upsert_messages(conn, account_id, messages):
             importance, str(m.get("reason", ""))[:400],
             str(m.get("model", ""))[:80], m.get("classified_at") or _now(),
             1 if m.get("deleted") else 0)
+        # Mail is read on a phone as often as it is read here, and that
+        # arrives as a label change on the next pull rather than as an edit.
+        # Stamping only local edits would leave everything read elsewhere
+        # sitting in the list for ever, which is most of it.
+        unread_now = 1 if m.get("is_unread", True) else 0
         if row:
+            read_at = row["read_at"] or ""
+            if not unread_now and row["is_unread"]:
+                read_at = _now()
+            elif unread_now:
+                read_at = ""
             conn.execute(
                 "UPDATE messages SET thread_id=?, sender=?, sender_email=?,"
                 " subject=?, snippet=?, received_at=?, is_unread=?,"
                 " is_starred=?, archived=?, labels=?, importance=?, reason=?,"
-                " model=?, classified_at=?, deleted=? WHERE id=?",
-                (*common, row["id"]))
+                " model=?, classified_at=?, deleted=?, read_at=? WHERE id=?",
+                (*common, read_at, row["id"]))
         else:
+            # First seen already read: it was read before this existed, and
+            # now is the only honest answer to when. Dated from arrival
+            # instead, a fortnight of back-fill would retire on sight.
             conn.execute(
                 "INSERT INTO messages (id, account_id, source_uid, thread_id,"
                 " sender, sender_email, subject, snippet, received_at,"
                 " is_unread, is_starred, archived, labels, importance, reason,"
-                " model, classified_at, deleted)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (_id(), account_id, uid, *common))
+                " model, classified_at, deleted, read_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (_id(), account_id, uid, *common, "" if unread_now else _now()))
         written += 1
     conn.commit()
     return written, skipped
+
+
+def _days_ago(n):
+    import datetime as _dt
+    return (_dt.datetime.now(_dt.UTC) - _dt.timedelta(days=n)).strftime(
+        "%Y-%m-%dT%H:%M:%S")
 
 
 def effective_importance_sql():
@@ -355,10 +374,28 @@ def effective_importance_sql():
     return "COALESCE(m.importance_override, m.importance, 0)"
 
 
-def inbox(conn, min_importance=3, limit=50, include_archived=False):
+def inbox(conn, min_importance=3, limit=50, include_archived=False,
+          read_days=0):
+    """The triage list.
+
+    `read_days` retires mail that has been read for longer than that. It is a
+    list of what still wants you, and something dealt with a week ago does
+    not -- left in place it only accumulates, and the unread mail the screen
+    exists to surface gets harder to find every day.
+
+    Nothing is deleted and nothing is unreachable: the caller can ask for
+    everything, and the screen offers that.
+    """
     where = ["m.deleted=0"]
+    args_pre = []
     if not include_archived:
         where.append("m.archived=0")
+    if read_days and int(read_days) > 0:
+        # Unread mail is never retired however old, and neither is anything
+        # starred: starring it is saying to keep it in front of you.
+        where.append(
+            "(m.is_unread=1 OR m.is_starred=1 OR m.read_at='' OR m.read_at > ?)")
+        args_pre.append(_days_ago(int(read_days)))
     # Every column except the body. m.* would ship up to 256 KB per message
     # once bodies are cached, turning a list of forty headers into megabytes
     # -- and the list never shows a body. It is fetched per message instead.
@@ -375,7 +412,7 @@ def inbox(conn, min_importance=3, limit=50, include_archived=False):
         " ORDER BY score DESC, m.received_at DESC LIMIT ?"
         % (effective_importance_sql(), " AND ".join(where),
            effective_importance_sql()),
-        (min_importance, limit)).fetchall()
+        (*args_pre, min_importance, limit)).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -403,6 +440,18 @@ def set_message(conn, message_id, **fields):
         if not 1 <= v <= 5:
             raise ValueError("importance must be between 1 and 5")
         fields["importance_override"] = v
+    # Stamped on the way from unread to read, and cleared going back, so a
+    # triage list can retire what has been dealt with. Both directions
+    # matter: marking something unread again is saying it still needs you.
+    if "is_unread" in fields:
+        now_read = not int(fields["is_unread"] or 0)
+        was = conn.execute("SELECT is_unread FROM messages WHERE id=?",
+                           (message_id,)).fetchone()
+        if now_read and was and was["is_unread"]:
+            fields["read_at"] = _now()
+        elif not now_read:
+            fields["read_at"] = ""
+
     values = [int(v) if isinstance(v, bool) else v for v in fields.values()]
     sets = ", ".join("%s=?" % k for k in fields)
     if fields.keys() & PUSHABLE:

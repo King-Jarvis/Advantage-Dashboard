@@ -46,6 +46,14 @@ SPEC = {
     # merely unread, which on first sync meant showing one message out of
     # forty. A filter nobody can see is indistinguishable from a broken feed.
     "inbox_min_importance": ("int", 2, "Only show mail scoring at least this"),
+    # This is a triage list, not an archive: something read a week ago has
+    # been dealt with, and leaving it in place means the list only ever grows
+    # and the unread mail it exists to surface gets harder to find. Nothing
+    # is deleted -- it stops being listed, and a control on the screen shows
+    # it again. 0 keeps everything.
+    "inbox_read_days": ("int", 7,
+                        "Hide mail this many days after you read it. "
+                        "0 keeps everything"),
 
     # Images are fetched by the dashboard, never by your browser, so the
     # sender learns that Eva asked and nothing about your device. Opening a
@@ -90,6 +98,7 @@ LABELS = {
     "mail_poll_seconds": "Mail check (seconds)",
     "calendar_poll_seconds": "Calendar check (seconds)",
     "inbox_min_importance": "Inbox importance threshold",
+    "inbox_read_days": "Retire read mail after (days)",
     "active_theme": "Theme",
     "load_remote_images": "Show pictures in email",
     "anthropic_api_key": "Anthropic API key",

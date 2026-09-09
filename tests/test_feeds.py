@@ -568,3 +568,99 @@ def test_the_event_type_survives_a_sync(conn, acct):
     feeds.upsert_events(conn, acct, [
         ev("b", "2026-10-04T00:00:00", event_type="birthday")])
     assert conn.execute("SELECT event_type FROM events").fetchone()[0] == "birthday"
+
+
+# ── retiring mail once it has been read ───────────────────────────────────
+def _msg(conn, acct, uid, *, unread=1, starred=0, importance=4, when=None):
+    feeds.upsert_messages(conn, acct, [{
+        "source_uid": uid, "subject": uid, "sender": "S",
+        "received_at": when or "2026-09-01T09:00:00",
+        "is_unread": bool(unread), "is_starred": bool(starred),
+        "importance": importance, "reason": "r",
+    }])
+    return conn.execute("SELECT id FROM messages WHERE source_uid=?",
+                        (uid,)).fetchone()["id"]
+
+
+def _age(conn, mid, days):
+    import datetime as dt
+    when = (dt.datetime.now(dt.UTC) - dt.timedelta(days=days)).strftime(
+        "%Y-%m-%dT%H:%M:%S")
+    conn.execute("UPDATE messages SET read_at=? WHERE id=?", (when, mid))
+    conn.commit()
+
+
+def test_reading_a_message_records_when(conn, acct):
+    mid = _msg(conn, acct, "m1")
+    assert conn.execute("SELECT read_at FROM messages WHERE id=?",
+                        (mid,)).fetchone()["read_at"] == ""
+    feeds.set_message(conn, mid, is_unread=0)
+    assert conn.execute("SELECT read_at FROM messages WHERE id=?",
+                        (mid,)).fetchone()["read_at"] != ""
+
+
+def test_marking_it_unread_again_clears_the_clock(conn, acct):
+    """Marking something unread is saying it still needs you."""
+    mid = _msg(conn, acct, "m1")
+    feeds.set_message(conn, mid, is_unread=0)
+    feeds.set_message(conn, mid, is_unread=1)
+    assert conn.execute("SELECT read_at FROM messages WHERE id=?",
+                        (mid,)).fetchone()["read_at"] == ""
+
+
+def test_mail_read_on_a_phone_is_stamped_too(conn, acct):
+    """Most mail is read elsewhere and arrives as a label change, not an edit.
+
+    Stamping only local edits would leave nearly everything in the list for
+    ever, which is the failure this exists to prevent.
+    """
+    mid = _msg(conn, acct, "m1", unread=1)
+    _msg(conn, acct, "m1", unread=0)          # same uid, now read at Gmail
+    assert conn.execute("SELECT read_at FROM messages WHERE id=?",
+                        (mid,)).fetchone()["read_at"] != ""
+
+
+def test_a_message_first_seen_already_read_is_dated_now(conn, acct):
+    """Dating it from arrival would retire a fortnight of backfill on sight."""
+    mid = _msg(conn, acct, "old", unread=0, when="2020-01-01T09:00:00")
+    assert conn.execute("SELECT read_at FROM messages WHERE id=?",
+                        (mid,)).fetchone()["read_at"] != ""
+    assert len(feeds.inbox(conn, min_importance=0, read_days=7)) == 1
+
+
+def test_read_mail_retires_after_the_window(conn, acct):
+    mid = _msg(conn, acct, "m1")
+    feeds.set_message(conn, mid, is_unread=0)
+    assert len(feeds.inbox(conn, min_importance=0, read_days=7)) == 1
+    _age(conn, mid, 8)
+    assert feeds.inbox(conn, min_importance=0, read_days=7) == []
+
+
+def test_unread_mail_never_retires_however_old(conn, acct):
+    """The list exists to surface what still wants you. Age is not an answer."""
+    _msg(conn, acct, "m1", unread=1, when="2020-01-01T09:00:00")
+    assert len(feeds.inbox(conn, min_importance=0, read_days=1)) == 1
+
+
+def test_starred_mail_never_retires(conn, acct):
+    """Starring it is saying to keep it in front of you."""
+    mid = _msg(conn, acct, "m1", starred=1)
+    feeds.set_message(conn, mid, is_unread=0)
+    _age(conn, mid, 90)
+    assert len(feeds.inbox(conn, min_importance=0, read_days=7)) == 1
+
+
+def test_zero_days_keeps_everything(conn, acct):
+    mid = _msg(conn, acct, "m1")
+    feeds.set_message(conn, mid, is_unread=0)
+    _age(conn, mid, 400)
+    assert len(feeds.inbox(conn, min_importance=0, read_days=0)) == 1
+
+
+def test_retiring_hides_but_never_deletes(conn, acct):
+    mid = _msg(conn, acct, "m1")
+    feeds.set_message(conn, mid, is_unread=0)
+    _age(conn, mid, 30)
+    assert feeds.inbox(conn, min_importance=0, read_days=7) == []
+    assert conn.execute("SELECT COUNT(*) n FROM messages WHERE deleted=0"
+                        ).fetchone()["n"] == 1

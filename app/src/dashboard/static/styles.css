@@ -624,6 +624,16 @@ a:hover { text-decoration: underline; }
    than something to be inferred from seven unlabelled bars. */
 .minihead { margin-bottom: var(--s1); }
 
+/* What the read-retention filter is holding back, and the way to see it.
+   Separated from the list by a rule rather than styled as another message:
+   it is a statement about the list, not a member of it. */
+.retired-note {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  padding: var(--s3) var(--s2) 0;
+  margin-top: var(--s2);
+  border-top: 1px solid var(--line);
+}
+
 /* ── widgets you can follow ───────────────────────────────────────────────
    A widget row points at something. Following it should land on that thing,
    and it should look like it will. */

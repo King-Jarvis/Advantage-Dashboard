@@ -791,10 +791,25 @@ class Handler(BaseHTTPRequestHandler):
         floor = settings.get(conn, "inbox_min_importance")
         min_imp = self._int_arg("min_importance", floor, 0, 5)
         include = (self.query().get("archived") or [""])[0] == "1"
+        days = settings.get(conn, "inbox_read_days")
+        # `retired=1` asks for the ones that have aged out as well, which is
+        # what the screen's own control sends. Retiring mail is a default for
+        # the list, not a wall around it.
+        if (self.query().get("retired") or [""])[0] == "1":
+            days = 0
+        messages = feeds.inbox(conn, min_importance=min_imp, limit=100,
+                               include_archived=include, read_days=days)
+        # How many the filter is holding back, so the screen can say so
+        # rather than quietly showing less than it has.
+        hidden = 0
+        if days:
+            hidden = len(feeds.inbox(conn, min_importance=min_imp, limit=100,
+                                     include_archived=include)) - len(messages)
         self.json_out({
             "min_importance": min_imp,
-            "messages": feeds.inbox(conn, min_importance=min_imp, limit=100,
-                                    include_archived=include)})
+            "read_days": days,
+            "retired_hidden": max(0, hidden),
+            "messages": messages})
 
     def api_syncst(self, conn, session):
         """Per-source freshness, so a stale feed is visible rather than quiet."""
@@ -1075,7 +1090,9 @@ class Handler(BaseHTTPRequestHandler):
         msgs = feeds.inbox(conn,
                            min_importance=settings.get(conn,
                                                        "inbox_min_importance"),
-                           limit=8) if connected else []
+                           limit=8,
+                           read_days=settings.get(conn, "inbox_read_days"),
+                           ) if connected else []
         calendar = {
             "connected": connected, "count": len(ev),
             "reason": "" if connected else "no Google account connected",

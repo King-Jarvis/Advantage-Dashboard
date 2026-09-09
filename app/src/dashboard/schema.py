@@ -11,7 +11,7 @@ operation is not optional.
 
 import json
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # Foreign keys are off by default in SQLite and must be enabled per
 # connection, not once per database. Enforced in storage.connect().
@@ -396,6 +396,11 @@ ADDED_COLUMNS = [
     # than examples of its own past output.
     ("transactions", "category_source", "TEXT NOT NULL DEFAULT ''"),
     ("import_rows", "category_source", "TEXT NOT NULL DEFAULT ''"),
+    # When this stopped being unread, so read mail can age out of a triage
+    # list. Not derivable from anything already stored: received_at is when
+    # it arrived, and a message from three weeks ago read this morning is
+    # newly dealt with, not old.
+    ("messages", "read_at", "TEXT NOT NULL DEFAULT ''"),
 ]
 
 
