@@ -11,7 +11,7 @@ operation is not optional.
 
 import json
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 # Foreign keys are off by default in SQLite and must be enabled per
 # connection, not once per database. Enforced in storage.connect().
@@ -408,6 +408,10 @@ ADDED_COLUMNS = [
     # never been overdrawn shows minus twelve hundred pounds. Harmless while
     # nothing displayed a balance as money you have; not harmless now.
     ("accounts", "opening_balance_cents", "INTEGER NOT NULL DEFAULT 0"),
+    # The transaction this row is the settled version of. A pending charge
+    # and the charge it becomes are one event, and the bank gives them
+    # different ids and often a different amount.
+    ("import_rows", "supersedes_txn_id", "TEXT NOT NULL DEFAULT ''"),
 ]
 
 

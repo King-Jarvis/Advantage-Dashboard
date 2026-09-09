@@ -306,6 +306,18 @@ def revert_batch(conn, batch_id):
     removed = 0
     for tid in txns:
         removed += ledger.delete_transaction(conn, tid)
+    # Anything this import retired comes back. Without it, undoing a file
+    # that settled a pending charge would take both away and leave the
+    # account short by a charge that really happened.
+    restored = 0
+    for r in conn.execute(
+            "SELECT supersedes_txn_id FROM import_rows"
+            " WHERE batch_id=? AND supersedes_txn_id <> ''",
+            (batch_id,)).fetchall():
+        restored += conn.execute(
+            "UPDATE transactions SET deleted=0 WHERE id=? AND deleted=1",
+            (r["supersedes_txn_id"],)).rowcount
+
     conn.execute("UPDATE import_rows SET txn_id=NULL WHERE batch_id=?",
                  (batch_id,))
     conn.execute("UPDATE import_batches SET state='reverted', rows_imported=0"
@@ -315,7 +327,7 @@ def revert_batch(conn, batch_id):
     # recomputed or the months this file covered stay marked as covered.
     refresh_coverage(conn, row["account_id"])
     return {"batch": batch_id, "transactions_removed": removed,
-            "rows": len(txns)}
+            "rows": len(txns), "pending_restored": restored}
 
 
 # ── deduplication ─────────────────────────────────────────────────────────
@@ -349,7 +361,38 @@ def assign_keys(account_id, rows):
     return rows
 
 
-def find_existing(conn, account_id, row, fuzz_days=3):
+# How long a charge may take to settle. Three days missed a Friday purchase
+# posting on Tuesday, which is a bank holiday weekend and not an unusual
+# event.
+SETTLE_DAYS = 5
+# How much larger a settled charge may be than its pending twin. A tip is
+# the reason this exists; a quarter is generous for one and far short of the
+# gap between two genuine visits.
+TIP_RATIO = 1.30
+TIP_FLOOR = 500          # ...or five pounds, whichever is larger, for small bills
+
+
+def _looks_like_same_payee(a, b):
+    """Same merchant, allowing for the bank rewording it on settlement.
+
+    A pending line reads "SQ *RIVERSIDE CAFE" and the posted one "RIVERSIDE
+    CAFE BR BRISTOL UK". Identical after normalising is the common case and
+    is checked first; past that it is the distinctive words that have to
+    agree, by the same overlap test the categoriser uses on merchants.
+    """
+    if a == b:
+        return True
+    if not a or not b:
+        return False
+    from .categorize import _tokens
+    x, y = _tokens(a), _tokens(b)
+    if not x or not y:
+        return False
+    shared = x & y
+    return bool(shared) and len(shared) / len(x | y) >= 0.5
+
+
+def find_existing(conn, account_id, row, fuzz_days=SETTLE_DAYS):
     """Is this row already in the ledger?
 
     Exact identity first. Failing that, a near match -- same amount, same
@@ -370,7 +413,44 @@ def find_existing(conn, account_id, row, fuzz_days=3):
         "  AND ABS(julianday(date) - julianday(?)) <= ?",
         (account_id, row["amount_cents"], row["payee_norm"], row["date"],
          fuzz_days)).fetchone()
-    return (hit["id"], "near") if hit else (None, "")
+    if hit:
+        return hit["id"], "near"
+
+    # The settled version of a pending charge: same merchant, the same money
+    # or a little more, and dated on or after the one already here.
+    #
+    # Direction matters and is most of what keeps this safe. Settlement comes
+    # after authorisation and never costs less, so a cheaper or earlier row
+    # is a different visit rather than the same one -- which is the case this
+    # would otherwise merge, and merging two real charges loses money as
+    # surely as counting one twice.
+    settled = row["amount_cents"]
+    if settled >= 0:
+        return None, ""
+
+    # The pending charge is for the same money or a little less, so in signed
+    # terms it sits between the settled amount and a fraction of it. Written
+    # out because the inequality reverses for negatives and reads wrong
+    # either way round: -37 is *greater* than -44, and is the smaller charge.
+    #
+    #   most it can be:  the settled amount itself      (no tip at all)
+    #   least it can be: settled / 1.30, or £5 less     (whichever is nearer
+    #                                                    zero, so a small
+    #                                                    bill is not held to
+    #                                                    a proportion)
+    floor = settled
+    ceiling = max(int(settled / TIP_RATIO), settled + TIP_FLOOR)
+    candidates = conn.execute(
+        "SELECT id, payee_norm FROM transactions"
+        " WHERE account_id=? AND deleted=0 AND parent_id IS NULL"
+        "   AND transfer_id IS NULL"
+        "   AND amount_cents >= ? AND amount_cents <= ?"
+        "   AND julianday(?) - julianday(date) BETWEEN 0 AND ?",
+        (account_id, floor, ceiling, row["date"], fuzz_days)).fetchall()
+    for c in candidates:
+        if _looks_like_same_payee(row["payee_norm"], c["payee_norm"]):
+            return c["id"], "settled"
+    return None, ""
 
 
 def new_id():
@@ -443,16 +523,23 @@ def create_batch(conn, account_id, filename, blob, mapping=None,
         existing, how = find_existing(conn, account_id, row)
         is_dup = bool(existing)
         duplicates += 1 if is_dup else 0
+        # A settlement is not skipped, it replaces. The pending row already
+        # here holds the authorised amount; this one holds what was actually
+        # taken, and that is the figure the account will show. Excluding it
+        # would leave the ledger a tip short for ever.
+        settles = how == "settled"
         conn.execute(
             "INSERT INTO import_rows (id, batch_id, line_no, raw, date,"
             " amount_cents, payee, payee_norm, notes, dedup_key, is_duplicate,"
-            " dup_kind, excluded, error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " dup_kind, excluded, error, supersedes_txn_id)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (new_id(), bid, row["line_no"], row["raw"][:500], row["date"],
              row["amount_cents"], row["payee"][:200], row["payee_norm"][:200],
              row["notes"][:200], row.get("dedup_key", ""), int(is_dup), how,
              # Duplicates and unparseable rows are excluded by default. The
              # safe default is to not import; including one is a decision.
-             int(is_dup or bool(row["error"])), row["error"]))
+             int((is_dup and not settles) or bool(row["error"])), row["error"],
+             existing if settles else ""))
     conn.execute("UPDATE import_batches SET rows_duplicate=? WHERE id=?",
                  (duplicates, bid))
     conn.commit()
@@ -513,6 +600,13 @@ def commit_batch(conn, batch_id, remember_as=""):
             continue
         if row["amount_cents"] is None:
             continue
+        # The pending charge this row settles. Soft-deleted rather than
+        # edited: undoing the import has to be able to put it back exactly,
+        # and a soft delete is a fact that can be reversed where an
+        # overwritten amount is not.
+        superseded = row["supersedes_txn_id"]
+        if superseded:
+            ledger.delete_transaction(conn, superseded)
         try:
             txn = ledger.add_transaction(
                 conn, b["account_id"], row["date"], int(row["amount_cents"]),

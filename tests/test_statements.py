@@ -404,3 +404,129 @@ def test_a_payee_with_no_entity_is_untouched(tmp_path):
            "<FITID>x</FITID><NAME>Plain Shop</NAME></STMTTRN></OFX>")
     rows, _ = st.parse_ofx(ofx)
     assert rows[0]["payee"] == "Plain Shop"
+
+
+# ── a pending charge and the charge it becomes ────────────────────────────
+def _statement(rows):
+    """An OFX body. Rows are (yyyymmdd, amount, payee, fitid)."""
+    return ("<OFX>" + "".join(
+        "<STMTTRN><DTPOSTED>%s120000</DTPOSTED><TRNAMT>%s</TRNAMT>"
+        "<FITID>%s</FITID><NAME>%s</NAME></STMTTRN>" % (d, a, f, n)
+        for d, a, n, f in rows) + "</OFX>").encode()
+
+
+def _import(conn, acct, rows, name="statement.qfx"):
+    bid, _ = st.create_batch(conn, acct, name, _statement(rows))
+    st.commit_batch(conn, bid)
+    return bid
+
+
+def _ledger(conn, acct):
+    return (conn.execute("SELECT COUNT(*) n FROM transactions WHERE deleted=0"
+                         ).fetchone()["n"],
+            ledger.account_balance(conn, acct))
+
+
+def test_a_settled_charge_replaces_its_pending_twin(conn, book):
+    """The bank gives them different ids, so nothing else joins them up."""
+    a = book["acct"]
+    _import(conn, a, [("20260907", "-37.00", "RIVERSIDE CAFE", "pending")])
+    _import(conn, a, [("20260909", "-37.00", "RIVERSIDE CAFE", "posted")])
+    assert _ledger(conn, a) == (1, -37_00)
+
+
+def test_settlement_over_a_weekend_is_still_one_charge(conn, book):
+    """Friday to Tuesday is four days, and three was the window."""
+    a = book["acct"]
+    _import(conn, a, [("20260904", "-37.00", "RIVERSIDE CAFE", "p")])
+    _import(conn, a, [("20260908", "-37.00", "RIVERSIDE CAFE", "s")])
+    assert _ledger(conn, a) == (1, -37_00)
+
+
+def test_a_tip_added_at_settlement_keeps_the_larger_figure(conn, book):
+    """The settled amount is what left the account, so it is the one to keep.
+
+    Excluding the settled row instead would leave the ledger a tip short for
+    ever, which is quieter and just as wrong as counting both.
+    """
+    a = book["acct"]
+    _import(conn, a, [("20260907", "-37.00", "RIVERSIDE CAFE", "p")])
+    _import(conn, a, [("20260909", "-44.00", "RIVERSIDE CAFE", "s")])
+    assert _ledger(conn, a) == (1, -44_00)
+
+
+def test_the_bank_rewording_the_payee_does_not_split_the_charge(conn, book):
+    """A pending line reads "SQ *RIVERSIDE CAFE" and the posted one does not."""
+    a = book["acct"]
+    _import(conn, a, [("20260907", "-37.00", "SQ *RIVERSIDE CAFE", "p")])
+    _import(conn, a, [("20260909", "-37.00", "RIVERSIDE CAFE BR BRISTOL UK", "s")])
+    assert _ledger(conn, a) == (1, -37_00)
+
+
+# ── and what must stay two charges ────────────────────────────────────────
+def test_a_cheaper_later_charge_is_a_second_visit(conn, book):
+    """Settlement never costs less than authorisation, so this is not one."""
+    a = book["acct"]
+    _import(conn, a, [("20260907", "-44.00", "RIVERSIDE CAFE", "x")])
+    _import(conn, a, [("20260909", "-37.00", "RIVERSIDE CAFE", "y")])
+    assert _ledger(conn, a) == (2, -81_00)
+
+
+def test_an_earlier_charge_is_not_a_settlement(conn, book):
+    a = book["acct"]
+    _import(conn, a, [("20260909", "-37.00", "RIVERSIDE CAFE", "x")])
+    _import(conn, a, [("20260907", "-44.00", "RIVERSIDE CAFE", "y")])
+    assert _ledger(conn, a) == (2, -81_00)
+
+
+def test_a_much_larger_charge_is_a_second_visit(conn, book):
+    """No tip turns 37 into 90. Merging two real charges loses money as
+    surely as counting one twice."""
+    a = book["acct"]
+    _import(conn, a, [("20260907", "-37.00", "RIVERSIDE CAFE", "x")])
+    _import(conn, a, [("20260909", "-90.00", "RIVERSIDE CAFE", "y")])
+    assert _ledger(conn, a) == (2, -127_00)
+
+
+def test_a_different_merchant_is_never_a_settlement(conn, book):
+    a = book["acct"]
+    _import(conn, a, [("20260907", "-37.00", "RIVERSIDE CAFE", "x")])
+    _import(conn, a, [("20260909", "-40.00", "SHELL GARAGE", "y")])
+    assert _ledger(conn, a) == (2, -77_00)
+
+
+def test_a_week_apart_is_two_charges(conn, book):
+    a = book["acct"]
+    _import(conn, a, [("20260901", "-37.00", "RIVERSIDE CAFE", "x")])
+    _import(conn, a, [("20260908", "-37.00", "RIVERSIDE CAFE", "y")])
+    assert _ledger(conn, a) == (2, -74_00)
+
+
+def test_two_real_charges_in_one_file_both_survive(conn, book):
+    """Same shop, same money, same day, two visits. The bank's own ids say
+    they are two, and collapsing them would quietly lose one."""
+    a = book["acct"]
+    _import(conn, a, [("20260907", "-37.00", "RIVERSIDE CAFE", "x"),
+                      ("20260907", "-37.00", "RIVERSIDE CAFE", "y")])
+    assert _ledger(conn, a) == (2, -74_00)
+
+
+def test_income_is_never_treated_as_a_settlement(conn, book):
+    a = book["acct"]
+    _import(conn, a, [("20260907", "1000.00", "PAYROLL", "x")])
+    _import(conn, a, [("20260909", "1100.00", "PAYROLL", "y")])
+    assert _ledger(conn, a) == (2, 2100_00)
+
+
+# ── undoing it ────────────────────────────────────────────────────────────
+def test_undoing_the_settlement_puts_the_pending_charge_back(conn, book):
+    """Otherwise undoing a file takes both away and leaves the account short
+    by a charge that really happened."""
+    a = book["acct"]
+    _import(conn, a, [("20260907", "-37.00", "RIVERSIDE CAFE", "p")])
+    bid = _import(conn, a, [("20260909", "-44.00", "RIVERSIDE CAFE", "s")])
+    assert _ledger(conn, a) == (1, -44_00)
+
+    out = st.revert_batch(conn, bid)
+    assert out["pending_restored"] == 1
+    assert _ledger(conn, a) == (1, -37_00)
