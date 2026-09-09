@@ -2355,3 +2355,77 @@ def test_a_charge_detail_names_the_other_half_of_a_transfer(live):
     assert body["is_transfer"] is True
     assert body["transfer_with"]["account"] == "Savings"
     assert body["transfer_with"]["amount_cents"] == 50_00
+
+
+# ── the budget widget's chart picks what it draws ─────────────────────────
+def _seed_widget(port):
+    """Categories where the biggest spender is not the fullest envelope."""
+    from dashboard import ledger, stats, storage
+    conn = storage.connect()
+    month = stats.this_month()
+    acct = ledger.create_account(conn, "Checking")
+    grp = ledger.create_category_group(conn, "Everyday")
+    made = {}
+    for name, budget, spent in (
+            ("Rent", 100_000, 20_000),        # huge, barely touched: 20%
+            ("Subscriptions", 1_000, 990),    # tiny, nearly gone:    99%
+            ("Groceries", 50_000, 25_000),    # big, halfway:         50%
+            ("Parking", 500, 450)):           # tiny, nearly gone:    90%
+        cid = ledger.create_category(conn, grp, name)
+        made[name] = cid
+        ledger.set_budget(conn, month, cid, budget)
+        if spent:
+            ledger.add_transaction(conn, acct, f"{month}-05", -spent, name, cid)
+    conn.close()
+    return made
+
+
+def test_the_widget_ranks_by_how_full_the_envelope_is(live):
+    """The chart draws a proportion, so the selection must be a proportion.
+
+    Ranking by amount spent picks the largest categories, which is a
+    different question -- and with only seven slots it is how a category at
+    99% gets crowded out by seven big ones at 20%.
+    """
+    cookie, _ = login(live)
+    _seed_widget(live)
+    _, _, body = call(live, "GET", "/api/view/home", headers={"Cookie": cookie})
+    names = [c["name"] for c in body["budget"]["top"]]
+    assert names[:4] == ["Subscriptions", "Parking", "Groceries", "Rent"]
+
+
+def test_a_category_with_no_budget_sorts_after_those_with_one(live):
+    """It has no proportion to be near, but its spending is real -- so it
+    goes last rather than being dropped."""
+    cookie, _ = login(live)
+    from dashboard import ledger, stats, storage
+    made = _seed_widget(live)
+    conn = storage.connect()
+    month = stats.this_month()
+    grp = conn.execute("SELECT group_id FROM categories WHERE id=?",
+                       (made["Rent"],)).fetchone()["group_id"]
+    loose = ledger.create_category(conn, grp, "Unbudgeted")
+    acct = conn.execute("SELECT id FROM accounts LIMIT 1").fetchone()["id"]
+    ledger.add_transaction(conn, acct, f"{month}-06", -9_999, "Whatever", loose)
+    conn.close()
+
+    _, _, body = call(live, "GET", "/api/view/home", headers={"Cookie": cookie})
+    names = [c["name"] for c in body["budget"]["top"]]
+    assert "Unbudgeted" in names, "spending must not vanish"
+    assert names.index("Unbudgeted") > names.index("Rent")
+
+
+def test_an_untouched_envelope_ranks_last_among_budgeted(live):
+    cookie, _ = login(live)
+    from dashboard import ledger, stats, storage
+    _seed_widget(live)
+    conn = storage.connect()
+    month = stats.this_month()
+    grp = conn.execute("SELECT id FROM category_groups LIMIT 1").fetchone()["id"]
+    idle = ledger.create_category(conn, grp, "Untouched")
+    ledger.set_budget(conn, month, idle, 20_000)
+    conn.close()
+
+    _, _, body = call(live, "GET", "/api/view/home", headers={"Cookie": cookie})
+    names = [c["name"] for c in body["budget"]["top"]]
+    assert names[-1] == "Untouched"

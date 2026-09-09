@@ -1025,9 +1025,27 @@ class Handler(BaseHTTPRequestHandler):
                 per_cat.append({"id": c["id"], "name": c["name"],
                                 "spent_cents": a, "budgeted_cents": b})
         over.sort(key=lambda x: -x["over_cents"])
-        # Ranked by what has actually gone out, falling back to what was set
-        # aside, so a month that has barely started still shows its shape.
-        per_cat.sort(key=lambda x: (-x["spent_cents"], -x["budgeted_cents"]))
+
+        # Ranked by how much of the envelope is gone, because that is what
+        # the widget's chart draws and what the glance is for: is anything
+        # running away from me.
+        #
+        # It ranked by amount spent, which is a different question and picks
+        # different categories. Only seven fit, so the seven largest crowded
+        # out a small one at ninety-nine per cent -- the chart said
+        # "proportion" and the selection said "size", and the one that
+        # mattered was the one left out.
+        #
+        # A category with nothing budgeted has no proportion to be near, so
+        # it sorts after the ones that do rather than being dropped: its
+        # spending is real and belongs on screen somewhere.
+        def used(c):
+            if c["budgeted_cents"] > 0:
+                return (0, -(c["spent_cents"] / c["budgeted_cents"]),
+                        -c["spent_cents"])
+            return (1, 0, -c["spent_cents"])
+
+        per_cat.sort(key=used)
 
         # A month nobody has budgeted for yet is a different state from one
         # where nothing has been spent, and the widget must be able to tell

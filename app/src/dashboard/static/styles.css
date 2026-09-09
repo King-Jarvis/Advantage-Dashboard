@@ -620,6 +620,9 @@ a:hover { text-decoration: underline; }
 .wtime { font-family: var(--mono); color: var(--text-3); flex: none; }
 .ok-line { color: var(--text-3); }
 .widget .empty { padding: var(--s5) var(--s2); margin: auto 0; }
+/* Says what the bars are ordered by, so the ordering is a fact rather
+   than something to be inferred from seven unlabelled bars. */
+.minihead { margin-bottom: var(--s1); }
 
 /* ── widgets you can follow ───────────────────────────────────────────────
    A widget row points at something. Following it should land on that thing,

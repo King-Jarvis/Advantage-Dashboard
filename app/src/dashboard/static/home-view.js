@@ -97,6 +97,11 @@ function goto(label, onGo, view) {
  * glance should answer is "is anything running away from me", and that is a
  * ratio.
  *
+ * The categories are chosen by the same measure they are drawn by: the ones
+ * closest to using their envelope up, not the ones that happen to be
+ * largest. Seven fit, and a small category at ninety-nine per cent is the
+ * one worth the slot.
+ *
  * A line marks the budget. Bars that cross it are over, drawn in red and
  * allowed to stand above the line rather than being clipped to it, because
  * how far past matters.
@@ -190,6 +195,7 @@ function budgetBody(b) {
     progress,
     b.top && b.top.length
       ? el("div", { class: "minibox" },
+          el("div", { class: "hint minihead", text: "closest to spent" }),
           miniSpend(b.top),
           el("div", { class: "minilabels" },
             ...b.top.map((i) => el("span", { class: "minilabel", text: i.name }))))
