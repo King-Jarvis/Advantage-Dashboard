@@ -765,3 +765,43 @@ def test_zero_days_purges_nothing(conn, acct):
     mid = _msg(conn, acct, "m1", unread=0, when="2020-01-01T09:00:00")
     _age(conn, mid, 900)
     assert feeds.purge_retired(conn, read_days=0, window_days=14) == 0
+
+
+def test_the_purge_never_touches_gmail(conn, acct, monkeypatch):
+    """Forgetting a message here is not deleting it there.
+
+    The two are entirely separate operations and must stay that way: the
+    dashboard is a triage list over a mailbox it does not own. Only the trash
+    button reaches Gmail, and it does so by setting `trashed` and letting the
+    push queue carry it -- a path the purge never enters, because it only
+    ever removes rows that have nothing pending.
+    """
+    from dashboard import google_api
+
+    def explode(*a, **k):
+        raise AssertionError("the purge reached out to Google")
+
+    for name in ("_send", "_send_retrying", "_get", "_get_retrying"):
+        if hasattr(google_api, name):
+            monkeypatch.setattr(google_api, name, explode)
+
+    mid = _msg(conn, acct, "m1", unread=0, when="2020-01-01T09:00:00")
+    _age(conn, mid, 30)
+    assert feeds.purge_retired(conn, read_days=7, window_days=14) == 1
+
+
+def test_the_purge_leaves_no_pending_change_behind(conn, acct):
+    """A deleted row cannot be pushed, so nothing may be queued when it goes.
+
+    If the purge took a dirty row, Gmail would never receive the edit and
+    nothing would remain to say so -- the edit would simply be gone.
+    """
+    mid = _msg(conn, acct, "m1", unread=1, when="2020-01-01T09:00:00")
+    feeds.set_message(conn, mid, archived=1)          # queued for Gmail
+    _age(conn, mid, 30)
+    conn.execute("UPDATE messages SET is_unread=0 WHERE id=?", (mid,))
+    conn.commit()
+
+    assert feeds.purge_retired(conn, read_days=7, window_days=14) == 0
+    from dashboard import push
+    assert push.pending_count(conn) == 1
