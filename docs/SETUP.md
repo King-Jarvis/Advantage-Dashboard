@@ -80,11 +80,36 @@ makes, not the single hop you were trying to fix.
    `gmail.modify` and `calendar.events`. Write scopes are required because the
    dashboard edits, not just reads.
 3. Create an **OAuth 2.0 Client ID**, type *Web application*, with redirect URI
-   `https://<host>:<port>/api/auth/google/callback` — the exact address you
-   reach the dashboard on, scheme and port included. Set `BASE_URL` in the
-   service environment to that same origin so the two cannot drift; a mismatch
-   surfaces as Google's `redirect_uri_mismatch`, which names the symptom and
-   not the cause.
+
+   ```
+   https://localhost:8766/api/auth/google/callback
+   ```
+
+   **Not the address you actually browse to.** Google refuses a redirect URI
+   pointing at a raw IP or a `.local`/`.lan` name, so `https://10.0.0.5:8766/…`
+   cannot be registered at all. `localhost` is the one exception it allows,
+   which makes it the only workable choice on a home network without a real
+   domain.
+
+   The consequence is that **the connect step has to happen in a browser on
+   the machine running the dashboard**, because that is the only place
+   `localhost` means this machine. Everything else — reading mail, editing the
+   budget — works from any device as normal; it is only the one-time consent
+   round trip that is pinned to the host. From another computer, an SSH tunnel
+   does the same job:
+
+   ```bash
+   ssh -L 8766:localhost:8766 you@your-dashboard-host
+   ```
+
+   Leave the `base_url` setting empty unless you have a real domain: empty
+   already means `https://localhost:8766`. Setting it to the address you
+   browse to is the mistake that produces a callback into nowhere — Google
+   sends the browser to a host that only exists on the dashboard machine.
+
+   If you do have a domain, put it in `base_url` and register the matching
+   URI instead. A mismatch between the two surfaces as Google's
+   `redirect_uri_mismatch`, which names the symptom and not the cause.
 4. **Publish the app to "In production."**
 
    Not optional, and the most common cause of a deployment that works for a week
