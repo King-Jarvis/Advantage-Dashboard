@@ -11,7 +11,6 @@
  */
 import { del, get, patch, post } from "./api.js";
 import { ledgerView } from "./ledger-view.js";
-import { savingsView } from "./savings-view.js";
 import { el, keepingPlace, money, moneyEl, mount, parseMoney, svg }
   from "./dom.js";
 import { spendingChart } from "./chart.js";
@@ -19,7 +18,6 @@ import { spendingChart } from "./chart.js";
 const state = {
   month: null, data: null, suggestions: null, coverage: null, groups: null,
   expanded: null, moveFrom: null, adding: false, error: "", splitting: null,
-  saving: false,
   organising: false,
 };
 
@@ -83,14 +81,6 @@ function header(onMonth, refresh) {
       el("button", { class: "btn ghost", type: "button", text: "›",
                      "aria-label": "Next month", onclick: () => shift(1) }),
       el("div", { class: "spacer" }),
-      el("button", { class: "btn", type: "button", text: "Spend less",
-                     onclick: () => {
-                       // Same reason as "Where things are filed": refresh(true)
-                       // re-renders this screen and never re-enters
-                       // budgetView, which is where the handover happens.
-                       state.saving = true;
-                       refresh();
-                     } }),
       el("button", { class: "btn", type: "button", text: "Where things are filed",
                      onclick: () => {
                        state.organising = true;
@@ -487,8 +477,30 @@ function detail(cat, suggestion, refresh) {
       fact("heading for", h.estimate_cents ? money(h.estimate_cents) : "—"),
       fact("aim for", h.suggested_cents === null ? "—" : money(h.suggested_cents)),
       fact("why", h.target_reason || ""),
+      el("div", { class: "factrow" },
+        el("span", { class: "label", text: "how movable" }), flex),
       fact("range", h.low_cents === null ? "—"
         : `${money(h.low_cents)} – ${money(h.high_cents)}`));
+
+    /* How much room this category has to be cut, which is what separates
+     * "aim for" from "heading for". Rent cannot be budgeted down by wanting
+     * it to be; a restaurant habit can. Left where the number it changes is
+     * already on screen, so the cause and the effect sit together. */
+    const flex = el("select", { class: "input", "aria-label": "How movable" },
+      ...[["essential", "Cannot be cut"],
+          ["semi", "Some room"],
+          ["discretionary", "Room to cut"]].map(([v, t]) =>
+        el("option", { value: v, text: t,
+                       selected: (h.flexibility || "semi") === v })));
+    flex.addEventListener("change", async () => {
+      try {
+        await patch(`/api/savings/flexibility/${cat.id}`,
+                    { flexibility: flex.value });
+      } catch (e) {
+        state.error = (e && e.message) || "Could not save that.";
+      }
+      refresh();
+    });
 
     const accept = h.suggested_cents === null ? null : el("button", {
       class: "btn primary", type: "button",
@@ -562,14 +574,6 @@ export async function budgetView(container, month, onMonth) {
         // their totals are not what they were when this screen was left.
         return budgetView(container, month, onMonth);
       },
-    });
-  }
-  if (state.saving) {
-    return savingsView(container, month, () => {
-      state.saving = false;
-      // Reloaded: accepting the plan changes this month's budgeted amounts,
-      // so the envelopes behind this screen are not what they were.
-      return budgetView(container, month, onMonth);
     });
   }
   const [data, groups] = await Promise.all([

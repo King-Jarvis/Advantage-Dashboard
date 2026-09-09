@@ -17,7 +17,7 @@ const GROUPS = [
   ["Themes", []],
   ["Credentials", ["google_client_id", "google_client_secret",
                    "anthropic_api_key"]],
-  ["Assistance", ["enable_llm_categories", "enable_spending_analysis",
+  ["Assistance", ["enable_llm_categories",
                   "classify_model"]],
   ["Budget engine", ["baseline_window_months", "min_months_for_suggestion",
                      "month_start_day", "currency_symbol"]],

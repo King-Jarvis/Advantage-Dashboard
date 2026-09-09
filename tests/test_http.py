@@ -2260,25 +2260,6 @@ def _seed_savings(port):
     return {"acct": acct, "cat": cat}
 
 
-def test_the_savings_plan_needs_a_session(live):
-    status, _, _ = call(live, "GET", "/api/view/savings")
-    assert status == 401
-
-
-def test_the_savings_plan_targets_a_month_you_have_had(live):
-    cookie, _ = login(live)
-    ids = _seed_savings(live)
-    status, _, body = call(live, "GET", "/api/view/savings?month=2025-08",
-                           headers={"Cookie": cookie})
-    assert status == 200, body
-    row = next(c for c in body["categories"] if c["category_id"] == ids["cat"])
-    # Unclassified, so treated as "semi": p40 of [100,200,300,400] is 220.
-    assert row["flexibility"] == "semi"
-    assert row["target_cents"] == 220_00
-    assert row["target_cents"] <= row["expected_cents"]
-    assert body["saves_cents"] == sum(c["saves_cents"] for c in body["categories"])
-
-
 def test_changing_a_flexibility_needs_csrf(live):
     cookie, _ = login(live)
     ids = _seed_savings(live)
@@ -2288,17 +2269,28 @@ def test_changing_a_flexibility_needs_csrf(live):
 
 
 def test_marking_a_category_essential_stops_it_being_cut(live):
+    """The one thing flexibility exists to guarantee.
+
+    You cannot decide to pay less rent, so a category you have marked
+    essential must be budgeted at what it will cost -- never trimmed below
+    its own forecast.
+    """
     cookie, csrf = login(live)
     ids = _seed_savings(live)
     hdrs = {"Cookie": cookie, "X-CSRF-Token": csrf}
+
+    path = f"/api/view/history?month=2025-08&category={ids['cat']}&months=12"
+    _, _, before = call(live, "GET", path, headers={"Cookie": cookie})
+    assert before["suggested_cents"] < before["estimate_cents"], "trimmed by default"
+
     status, _, _ = call(live, "PATCH", f"/api/savings/flexibility/{ids['cat']}",
                         {"flexibility": "essential"}, headers=hdrs)
     assert status == 200
-    _, _, body = call(live, "GET", "/api/view/savings?month=2025-08",
-                      headers={"Cookie": cookie})
-    row = next(c for c in body["categories"] if c["category_id"] == ids["cat"])
-    assert row["saves_cents"] == 0
-    assert row["flexibility_source"] == "you"
+
+    _, _, after = call(live, "GET", path, headers={"Cookie": cookie})
+    assert after["flexibility"] == "essential"
+    assert after["suggested_cents"] == after["estimate_cents"]
+    assert after["target_reason"] == "fixed cost, budget what it will be"
 
 
 def test_an_invented_flexibility_is_a_400(live):
@@ -2308,39 +2300,6 @@ def test_an_invented_flexibility_is_a_400(live):
                         {"flexibility": "free"},
                         headers={"Cookie": cookie, "X-CSRF-Token": csrf})
     assert status == 400
-
-
-def test_applying_the_plan_sets_only_the_categories_you_name(live):
-    cookie, csrf = login(live)
-    ids = _seed_savings(live)
-    hdrs = {"Cookie": cookie, "X-CSRF-Token": csrf}
-    status, _, body = call(live, "POST", "/api/savings/apply/2025-08",
-                           {"category_ids": [ids["cat"]]}, headers=hdrs)
-    assert status == 200 and body["applied"] == 1
-
-    from dashboard import ledger, storage
-    conn = storage.connect()
-    assert ledger.get_budget(conn, "2025-08", ids["cat"]) == 220_00
-    conn.close()
-
-
-def test_applying_the_plan_with_no_categories_is_refused(live):
-    cookie, csrf = login(live)
-    _seed_savings(live)
-    status, _, _ = call(live, "POST", "/api/savings/apply/2025-08",
-                        {"category_ids": []},
-                        headers={"Cookie": cookie, "X-CSRF-Token": csrf})
-    assert status == 400
-
-
-def test_classifying_sends_nothing_when_the_feature_is_off(live):
-    cookie, csrf = login(live)
-    _seed_savings(live)
-    status, _, body = call(live, "POST", "/api/savings/classify", {},
-                           headers={"Cookie": cookie, "X-CSRF-Token": csrf})
-    assert status == 200
-    assert body["allowed"] is False
-    assert body["asked"] == 0
 
 
 # ── one charge, in full ───────────────────────────────────────────────────

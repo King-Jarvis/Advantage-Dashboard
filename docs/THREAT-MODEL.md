@@ -36,7 +36,7 @@ limitation below before deciding that is acceptable for your network.
 |---|---|
 | Secret committed to the repo | `.gitignore`, gitleaks in pre-commit *and* over full history in CI, `detect-private-key`, a CI grep for host-specific strings, and a CI check that no `.db`/`.key`/`.pem`/`.qfx`/`.env` file is tracked. Guards are tested by planting violations |
 | Stored XSS via email subject, sender, payee or model text | `textContent` only, with CI rejecting every markup sink; and a CSP with no `unsafe-inline` in `script-src` or `style-src`. Two independent controls, so one mistake is not a breach |
-| Prompt injection via email, payee or category text | Untrusted content delimited and named as untrusted; output parsed as strict JSON; a category name that is not already yours is discarded, as is a flexibility class we did not define; importance clamped 1–5; output never drives control flow, and never becomes a monetary figure |
+| Prompt injection via email or payee text | Untrusted content delimited and named as untrusted; output parsed as strict JSON; a category name that is not already yours is discarded; importance clamped 1–5; output never drives control flow, and never becomes a monetary figure |
 | Credential harvesting by a stolen session | Secrets are write-only through the API. `all_for_display` returns whether a secret is set, never its value — so a hijacked session cannot read back the Google client secret or the Anthropic key |
 | Malicious statement upload | 10 MB size cap, 20,000 row cap, decode-and-sniff before parsing, streamed parse, parse errors surfaced rather than swallowed. Never executed. Uploads are staged for review and write nothing to the ledger until confirmed |
 | OAuth CSRF or code interception | PKCE (S256), single-use `state` with an expiry, exact redirect URI, sign-in and connect scopes kept separate |
@@ -90,9 +90,8 @@ limitation below before deciding that is acceptable for your network.
 
 - **Prompt injection cannot be eliminated**, only bounded. Constraining the output shape
   and keeping it out of control flow limits the worst case to a wrong importance score, a
-  merchant filed under a category you already created, or a category marked more flexible
-  than it is -- which changes a suggested figure on screen, never a stored budget, and is
-  corrected by one dropdown.
+  merchant filed under a category you already created -- which changes a suggested figure
+  on screen, never a stored budget, and is corrected by refiling one row.
 
 - **Dependencies are version-pinned, not hash-pinned.** A compromised release of the one
   runtime dependency would be installed. Add `--require-hashes` for a deployment that

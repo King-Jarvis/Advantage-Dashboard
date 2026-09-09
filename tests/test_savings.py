@@ -8,7 +8,7 @@ that matters.
 
 import pytest
 
-from dashboard import categorize, ledger, savings, stats
+from dashboard import ledger, savings, stats
 
 
 @pytest.fixture
@@ -146,110 +146,6 @@ def test_an_unclassified_category_defaults_to_cautious(conn, book):
     row = conn.execute("SELECT flexibility FROM categories WHERE id=?",
                        (book["dining"],)).fetchone()
     assert savings.flexibility_of(row) == "semi"
-
-
-def test_only_unjudged_categories_are_worth_asking_about(conn, book):
-    assert len(savings.needs_classifying(conn)) == 4
-    savings.set_flexibility(conn, book["rent"], "essential")
-    names = [c["name"] for c in savings.needs_classifying(conn)]
-    assert "Rent" not in names and len(names) == 3
-
-
-# ── the whole plan ────────────────────────────────────────────────────────
-def test_the_plan_totals_what_it_frees_up(conn, book):
-    history(conn, book, "dining", [100, 200, 300, 400])
-    history(conn, book, "rent", [900, 900, 900, 900])
-    savings.set_flexibility(conn, book["dining"], "discretionary")
-    savings.set_flexibility(conn, book["rent"], "essential")
-
-    p = savings.plan(conn, end_month="2025-08")
-    by = {c["name"]: c for c in p["categories"]}
-
-    assert by["Rent"]["saves_cents"] == 0
-    assert by["Eating Out"]["target_cents"] == 175_00
-    dining = by["Eating Out"]
-    assert dining["saves_cents"] == dining["expected_cents"] - 175_00
-    assert p["saves_cents"] == sum(c["saves_cents"] for c in p["categories"])
-    assert p["target_cents"] == p["expected_cents"] - p["saves_cents"]
-
-
-def test_the_plan_leads_with_the_biggest_win(conn, book):
-    history(conn, book, "dining", [100, 200, 300, 400])
-    history(conn, book, "food", [10, 20, 30, 40])
-    for c in ("dining", "food"):
-        savings.set_flexibility(conn, book[c], "discretionary")
-
-    p = savings.plan(conn, end_month="2025-08")
-    saves = [c["saves_cents"] for c in p["categories"]]
-    assert saves == sorted(saves, reverse=True)
-
-
-def test_the_plan_says_when_it_has_too_little_history(conn, book):
-    history(conn, book, "dining", [100, 200])
-    p = savings.plan(conn, end_month="2025-08")
-    assert p["enough"] is False
-    assert p["minimum"] == stats.MIN_MONTHS
-
-
-def test_the_plan_names_what_it_has_not_judged(conn, book):
-    history(conn, book, "dining", [100, 200, 300, 400])
-    p = savings.plan(conn, end_month="2025-08")
-    assert "Eating Out" in p["unclassified"]
-    savings.set_flexibility(conn, book["dining"], "discretionary")
-    assert "Eating Out" not in savings.plan(conn, end_month="2025-08")["unclassified"]
-
-
-# ── the model call ────────────────────────────────────────────────────────
-def test_nothing_is_sent_when_the_model_is_off(conn, book, monkeypatch):
-    def boom(*a, **k):
-        raise AssertionError("the model must not be called when it is off")
-    monkeypatch.setattr(savings, "_ask_model", boom)
-    out = savings.classify(conn, use_model=False)
-    assert out["classified"] == 0
-    assert out["asked"] == 0
-
-
-def test_nothing_is_sent_when_there_is_nothing_to_ask(conn, book, monkeypatch):
-    """Pressing the button again with nothing new must cost nothing."""
-    for c in ("dining", "food", "rent", "annual"):
-        savings.set_flexibility(conn, book[c], "semi")
-
-    def boom(*a, **k):
-        raise AssertionError("asked the model about an already-sorted category")
-
-    monkeypatch.setattr(savings, "_ask_model", boom)
-    monkeypatch.setattr(categorize, "available", lambda: True)
-    out = savings.classify(conn, use_model=True)
-    assert out["asked"] == 0
-    assert out["classified"] == 0
-
-
-def test_only_names_are_sent(conn, book, monkeypatch):
-    """Not amounts, not dates, not payees. The judgement is about words."""
-    history(conn, book, "dining", [100, 200, 300, 400])
-    seen = {}
-
-    def fake(names, **kw):
-        seen["names"] = list(names)
-        return {n: "discretionary" for n in names}
-
-    monkeypatch.setattr(savings, "_ask_model", fake)
-    monkeypatch.setattr(categorize, "available", lambda: True)
-    savings.classify(conn, use_model=True)
-    assert seen["names"] == ["Car Tax", "Eating Out", "Groceries", "Rent"]
-
-
-def test_an_invented_class_from_the_model_is_discarded(conn, book, monkeypatch):
-    monkeypatch.setattr(savings, "_ask_model",
-                        lambda names, **kw: {"Rent": "obviously_free"})
-    monkeypatch.setattr(categorize, "available", lambda: True)
-    out = savings.classify(conn, use_model=True)
-    assert out["classified"] == 0
-    row = conn.execute("SELECT flexibility FROM categories WHERE id=?",
-                       (book["rent"],)).fetchone()
-    assert row["flexibility"] == ""
-
-
 # ── the two figures must not be the same number twice ─────────────────────
 def test_the_target_is_not_just_the_forecast_again(conn, book):
     """They answer different questions and used to answer with one number.
@@ -310,14 +206,3 @@ def test_a_fixed_cost_is_budgeted_at_what_it_will_actually_be(conn, book):
     target, reason = savings.target_for(a, "essential")
     assert target == a["estimate_cents"]
     assert reason == "fixed cost, budget what it will be"
-
-
-def test_no_category_ever_shows_a_negative_saving(conn, book):
-    for cat, amounts in (("dining", [900, 900, 400]),
-                         ("food", [10, 500, 520]),
-                         ("rent", [800, 900, 1000]),
-                         ("annual", [0, 0, 600])):
-        history(conn, book, cat, amounts)
-    p = savings.plan(conn, end_month="2025-08")
-    for c in p["categories"]:
-        assert c["saves_cents"] >= 0, f"{c['name']} saves {c['saves_cents']}"

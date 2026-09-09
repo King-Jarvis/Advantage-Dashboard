@@ -48,33 +48,21 @@ class is what lets the interface say *set aside £100 a month for this*.
 
 That constraint is the whole design. Models are unreliable at arithmetic over hundreds of
 rows, and a figure you cannot reproduce is not a budget. Every number in this engine and
-in the savings plan is recomputable from the same inputs by running the code again.
+in the targets is recomputable from the same inputs by running the code again.
 
-What it does instead is one judgement about language: given a category *name*, how much
-freedom does someone have to spend less on it? "Rent" is contractual, "Going Out" is not.
-That is a question about what words mean, which is what a model is actually good at, and
-it is a question arithmetic cannot answer at all — `stats.py` can see that Rent costs
-£519 a month but has no way to know you cannot simply decide to pay less.
+There is one judgement arithmetic cannot make: given a category, how much freedom do you
+have to spend less on it? `stats.py` can see that Rent costs £638 a month and has no way
+to know you cannot simply decide to pay less. That is what the *flexibility* on each
+category records — cannot be cut, some room, room to cut — and you set it yourself from
+the category's detail panel on the budget screen.
 
-The answer is one of three words per category, stored on the category. The savings plan
-then does its own arithmetic from your own months. Change the word and the numbers change
-deterministically; the model is not consulted again.
-
-Your answer outranks the model's. A flexibility you set by hand is never overwritten,
-because you know which of your bills are actually fixed and the model is guessing from a
-label you wrote.
+It decides one thing: whether the target is allowed to sit below the forecast. A fixed
+cost is budgeted at what it will actually be; a flexible one is trimmed towards a month
+you have already had. Change the word and the numbers change deterministically.
 
 ## Privacy
 
 The budget engine sends nothing anywhere. Every figure is computed on the machine.
-
-The savings plan's classification step sends **category names only** — the labels you
-typed, such as "Eating Out" and "Rent". Not amounts, not dates, not payees, not balances,
-not account numbers, and not the plan itself. The judgement does not depend on the
-amounts, so they are not sent: "Rent" is contractual whether it is £200 or £2,000.
-
-It is off unless you enable it in Settings, and the answer is cached on each category, so
-it runs once per category ever. Pressing the button again with nothing new costs nothing.
 
 Merchant categorisation is a separate feature with the same shape, and off by default.
 It sends normalised merchant names plus up to forty `merchant -> category` examples from

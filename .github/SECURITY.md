@@ -40,8 +40,7 @@ influences control flow — the worst outcome is a wrong score on one email.
 writes the accompanying sentence. A budget you cannot reproduce or audit is
 worse than no budget.
 
-**Names only.** Two features can call a model, both off by default and both
-enabled separately in Settings.
+**Names only.** One feature can call a model, and it is off by default.
 
 Filing an unfamiliar merchant sends normalised merchant names, your category
 names, and up to forty worked examples from your own ledger in the form
@@ -50,11 +49,10 @@ a night out when both are just restaurants. They are drawn from filings you
 made by hand in preference to the model's own past output, so a guess is
 never fed back as evidence for itself.
 
-The savings plan sends category names alone, to judge which are contractual.
-
-Neither sends amounts, dates, balances, account numbers or message contents,
-and neither lets the model produce a number: it returns a label, and the
-arithmetic is done here.
+It sends no amounts, dates, balances, account numbers or message contents,
+and it cannot produce a number: it returns a label, and the arithmetic is
+done here. Mail importance is scored entirely from headers, with no model
+involved at any point.
 
 ## Known limitations
 

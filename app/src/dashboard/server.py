@@ -138,12 +138,8 @@ ROUTES = [
      re.compile(r"^/api/edit/budget/(\d{4}-\d{2})/([0-9a-f]{32})$"), "session"),
     ("movemoney", {"POST"},
      re.compile(r"^/api/edit/budget/(\d{4}-\d{2})/move$"), "session"),
-    ("savings",  {"GET"},         re.compile(r"^/api/view/savings$"),       "session"),
-    ("savesort", {"POST"},        re.compile(r"^/api/savings/classify$"),   "session"),
     ("saveflex", {"PATCH"},
      re.compile(r"^/api/savings/flexibility/([0-9a-f]{32})$"),              "session"),
-    ("saveall",  {"POST"},
-     re.compile(r"^/api/savings/apply/(\d{4}-\d{2})$"),                    "session"),
 ]
 
 
@@ -1198,25 +1194,6 @@ class Handler(BaseHTTPRequestHandler):
                 "occurrences": r.get("occurrences", 0),
             } for r in rows]})
 
-    def api_savings(self, conn, session):
-        """What each category could cost instead of what it does cost."""
-        self.json_out(savings.plan(conn, end_month=self._month()))
-
-    def api_savesort(self, conn, session):
-        """Sort the unclassified categories by how movable they are.
-
-        Only the names of categories you have not judged yet are sent, and
-        only once each: the answer is stored, so pressing this again with
-        nothing new costs nothing.
-        """
-        allowed = bool(settings.get(conn, "enable_spending_analysis"))
-        if allowed:
-            os.environ["ANTHROPIC_API_KEY"] = settings.get(conn, "anthropic_api_key")
-            os.environ["CLASSIFY_MODEL"] = settings.get(conn, "classify_model")
-        result = savings.classify(conn, use_model=allowed)
-        result["allowed"] = allowed
-        self.json_out(result)
-
     def api_saveflex(self, conn, session, category_id):
         """Correct one category's flexibility. Yours is never overwritten."""
         data = self.body_json()
@@ -1224,26 +1201,6 @@ class Handler(BaseHTTPRequestHandler):
                                 data.get("flexibility"), source="you")
         self.json_out({"category_id": category_id,
                        "flexibility": data.get("flexibility")})
-
-    def api_saveall(self, conn, session, month):
-        """Set this month's budget to the plan's targets.
-
-        Only the categories named in the request, so accepting the plan is
-        still a decision per category rather than one irreversible button.
-        """
-        from . import ledger
-        data = self.body_json()
-        wanted = data.get("category_ids")
-        if not isinstance(wanted, list) or not wanted:
-            raise ValueError("choose at least one category")
-        targets = {c["category_id"]: c["target_cents"]
-                   for c in savings.plan(conn, end_month=month)["categories"]}
-        applied = 0
-        for cid in wanted:
-            if cid in targets:
-                ledger.set_budget(conn, month, cid, targets[cid])
-                applied += 1
-        self.json_out({"month": month, "applied": applied})
 
     def api_history(self, conn, session):
         """Monthly spend for one category, for the chart."""
@@ -1260,6 +1217,8 @@ class Handler(BaseHTTPRequestHandler):
         a = stats.analyse(conn, cat, end_month=month, window=window)
         target = savings.targets(conn, end_month=month, window=window,
                                  analyses={cat: a}).get(cat)
+        flex_row = conn.execute(
+            "SELECT flexibility FROM categories WHERE id=?", (cat,)).fetchone()
         self.json_out({
             "category_id": cat, "months": a["months"],
             "spend": [a["spend_by_month"][m] for m in a["months"]],
@@ -1270,6 +1229,8 @@ class Handler(BaseHTTPRequestHandler):
             "estimate_cents": a.get("estimate_cents") or 0,
             "suggested_cents": target[0] if target else a["suggested_cents"],
             "target_reason": target[1] if target else "",
+            # What decides whether "aim for" is allowed below "heading for".
+            "flexibility": flex_row["flexibility"] if flex_row else "",
             "low_cents": a["low_cents"], "high_cents": a["high_cents"],
             "kind": a["kind"], "confidence": a["confidence"],
             "sample_months": a["sample_months"], "basis": a["basis"],
