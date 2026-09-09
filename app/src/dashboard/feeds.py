@@ -379,6 +379,71 @@ def effective_importance_sql():
     return "COALESCE(m.importance_override, m.importance, 0)"
 
 
+def apply_read_state(conn, account_id, read_uids, days=14):
+    """Bring local read flags in line with Gmail's, both directions.
+
+    Scoped to messages that arrived inside the window the sweep asked about.
+    Outside it Gmail was never asked, so its silence says nothing -- treating
+    that as "unread" would resurrect every old message on every sync.
+
+    A row with an unpushed edit is left alone. That edit is the newer fact,
+    and overwriting it here would undo what the push is on its way to do.
+    """
+    changed = 0
+    rows = conn.execute(
+        "SELECT id, source_uid, is_unread, read_at FROM messages"
+        " WHERE account_id=? AND deleted=0 AND dirty=0"
+        "   AND received_at >= ?", (account_id, _days_ago(int(days)))).fetchall()
+    for r in rows:
+        read_now = r["source_uid"] in read_uids
+        if read_now and r["is_unread"]:
+            conn.execute("UPDATE messages SET is_unread=0, read_at=?"
+                         " WHERE id=?", (_now(), r["id"]))
+            changed += 1
+        elif not read_now and not r["is_unread"]:
+            conn.execute("UPDATE messages SET is_unread=1, read_at=''"
+                         " WHERE id=?", (r["id"],))
+            changed += 1
+    if changed:
+        conn.commit()
+    return changed
+
+
+def purge_retired(conn, read_days, window_days=14):
+    """Delete mail that has been read long enough to leave the list.
+
+    Hiding it was the first step and keeping it was never the point: this is
+    a triage list, and a message dealt with a fortnight ago is not something
+    to store, index and back up for ever. The body cache goes with it, which
+    is most of the weight.
+
+    Two guards decide what is safe to remove.
+
+    It must be beyond the window the sync asks Gmail for. Deleting something
+    Gmail would still hand back means it returns on the next pull, arrives
+    looking new, and starts its clock again -- a message that cannot be got
+    rid of.
+
+    And it must have nothing pending. A row with an unpushed edit still owes
+    Gmail a change; deleting it drops the edit silently, which is the one
+    outcome worse than keeping the row.
+
+    Starred and unread mail is never touched, for the same reasons it is
+    never retired from the list.
+    """
+    if not read_days or int(read_days) <= 0:
+        return 0
+    cur = conn.execute(
+        "DELETE FROM messages"
+        " WHERE deleted=0 AND dirty=0 AND is_unread=0 AND is_starred=0"
+        "   AND read_at <> '' AND read_at < ?"
+        "   AND received_at < ?",
+        (_days_ago(int(read_days)), _days_ago(int(window_days))))
+    n = cur.rowcount
+    conn.commit()
+    return n
+
+
 def inbox(conn, min_importance=3, limit=50, include_archived=False,
           read_days=0):
     """The triage list.

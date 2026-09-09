@@ -679,3 +679,47 @@ def test_a_security_alert_outscores_a_friend(conn, acct, monkeypatch):
     assert "security" in by_id["s1"]["reason"]
     assert by_id["s1"]["importance"] > by_id["p1"]["importance"]
     assert by_id["m1"]["importance"] < 5
+
+
+# ── sweeping read state cheaply ───────────────────────────────────────────
+def test_the_read_sweep_pages_through_every_id(conn, acct, monkeypatch):
+    """Ids only, so one listing covers the whole window.
+
+    The metadata fetch is a request per message and has to stay small, which
+    is why it only ever saw about a day. This is the same question asked in
+    a form that scales.
+    """
+    pages = [
+        {"messages": [{"id": "a"}, {"id": "b"}], "nextPageToken": "p2"},
+        {"messages": [{"id": "c"}]},
+    ]
+    seen = []
+
+    def fake(conn_, aid, url, params=None):
+        seen.append(params)
+        return pages[len(seen) - 1]
+
+    monkeypatch.setattr(google_api, "_get_retrying", fake)
+    assert google_api.fetch_read_uids(conn, acct) == {"a", "b", "c"}
+    assert len(seen) == 2
+    assert "is:read" in seen[0]["q"]
+    assert seen[1]["pageToken"] == "p2"
+
+
+def test_the_read_sweep_asks_for_the_whole_window(conn, acct, monkeypatch):
+    seen = {}
+
+    def fake(conn_, aid, url, params=None):
+        seen.update(params)
+        return {"messages": []}
+
+    monkeypatch.setattr(google_api, "_get_retrying", fake)
+    google_api.fetch_read_uids(conn, acct, days=14)
+    assert "newer_than:14d" in seen["q"]
+    assert seen["maxResults"] == google_api.READ_SWEEP_PAGE
+
+
+def test_an_empty_mailbox_sweeps_to_nothing(conn, acct, monkeypatch):
+    monkeypatch.setattr(google_api, "_get_retrying",
+                        lambda *a, **k: {"messages": []})
+    assert google_api.fetch_read_uids(conn, acct) == set()

@@ -24,12 +24,32 @@ def _one(conn, account, days_ahead, mail_query):
     feeds.note_sync(conn, source, "ok", cursor=next_cursor)
     messages = google_api.fetch_messages(conn, aid, query=mail_query)
     ms_written, ms_skipped = feeds.upsert_messages(conn, aid, messages)
+
+    # The metadata fetch above is one request per message, so it stays small
+    # and only ever sees about a day. Reading something older on a phone was
+    # therefore invisible here. This is the same question asked cheaply --
+    # ids only, one listing for the whole window -- so it can cover the rest.
+    reread = 0
+    try:
+        read_uids = google_api.fetch_read_uids(conn, aid)
+        reread = feeds.apply_read_state(conn, aid, read_uids,
+                                        days=google_api.MAIL_WINDOW_DAYS)
+    except google_api.GoogleError:
+        # A sweep that fails must not lose the pull that succeeded.
+        pass
+
+    # Read long enough ago, and old enough that Gmail will not hand it back.
+    dropped = feeds.purge_retired(
+        conn, settings.get(conn, "inbox_read_days"),
+        window_days=google_api.MAIL_WINDOW_DAYS)
+
     settings.note_sync(conn, aid, "")
     return {
         "account": account.get("email", ""),
         "ok": True,
         "events": ev_written, "events_held": ev_skipped,
         "messages": ms_written, "messages_held": ms_skipped,
+        "read_elsewhere": reread, "retired": dropped,
     }
 
 

@@ -29,6 +29,12 @@ HTTP_TIMEOUT = 20
 # A cap, not a target. A scheduled sync that quietly grows into a thousand
 # requests is how an API quota is exhausted at three in the morning.
 MAX_MESSAGES = 40
+# How far back the mail queries reach. Named because the purge has to know
+# it: a message deleted while Gmail would still hand it back simply returns
+# on the next sync.
+MAIL_WINDOW_DAYS = 14
+# Ids per page when sweeping read state. Ids only, so the page can be large.
+READ_SWEEP_PAGE = 500
 # A year forward and a season back. Narrower than this and the calendar can
 # only show the month you are standing in, which is not a calendar.
 DAYS_BACK = 90
@@ -543,6 +549,34 @@ def _baseline(labels, bulk=False, direct=False, machine=False,
     if unread:
         return 3, "unread, and not a mailing"
     return 2, "read, and not a mailing"
+
+
+def fetch_read_uids(conn, account_id, days=MAIL_WINDOW_DAYS):
+    """Which recent messages Gmail considers read.
+
+    fetch_messages asks for the newest forty and fetches metadata for each,
+    which is a request per message and therefore has to stay small. At thirty
+    messages a day that is about a day of history -- so reading anything
+    older on a phone was never noticed here, and it sat unread for ever. On
+    this mailbox that was a hundred and sixty-three of two hundred and three.
+
+    This is the cheap half of the problem. Asking for ids alone costs one
+    listing rather than one request per message, so it can cover the whole
+    window: five hundred ids a page, and the read flag is the answer.
+    """
+    out, page = set(), None
+    while True:
+        params = {"maxResults": READ_SWEEP_PAGE,
+                  "q": "-in:chats is:read newer_than:%dd" % int(days)}
+        if page:
+            params["pageToken"] = page
+        data = _get_retrying(conn, account_id, GMAIL_LIST, params)
+        for stub in data.get("messages", []) or []:
+            if stub.get("id"):
+                out.add(stub["id"])
+        page = data.get("nextPageToken")
+        if not page:
+            return out
 
 
 def fetch_messages(conn, account_id, query="-in:chats newer_than:14d",

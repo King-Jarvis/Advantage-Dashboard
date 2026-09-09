@@ -678,3 +678,90 @@ def test_a_read_message_with_no_timestamp_gets_one(conn, acct):
     _msg(conn, acct, "m1", unread=0)          # next sync sees it again
     assert conn.execute("SELECT read_at FROM messages WHERE id=?",
                         (mid,)).fetchone()["read_at"] != ""
+
+
+# ── read somewhere else, and gone for good ────────────────────────────────
+def test_reading_it_on_gmail_is_noticed(conn, acct):
+    """The metadata fetch only ever sees about a day of mail.
+
+    Anything older read on a phone stayed unread here for ever -- on the
+    mailbox this was written against, 163 messages of 203.
+    """
+    mid = _msg(conn, acct, "m1", unread=1)
+    changed = feeds.apply_read_state(conn, acct, {"m1"})
+    assert changed == 1
+    row = conn.execute("SELECT is_unread, read_at FROM messages WHERE id=?",
+                       (mid,)).fetchone()
+    assert row["is_unread"] == 0
+    assert row["read_at"] != ""
+
+
+def test_marking_it_unread_on_gmail_brings_it_back(conn, acct):
+    mid = _msg(conn, acct, "m1", unread=0)
+    feeds.apply_read_state(conn, acct, set())
+    row = conn.execute("SELECT is_unread, read_at FROM messages WHERE id=?",
+                       (mid,)).fetchone()
+    assert row["is_unread"] == 1
+    assert row["read_at"] == ""
+
+
+def test_a_message_older_than_the_sweep_is_left_alone(conn, acct):
+    """Gmail was never asked about it, so its silence says nothing.
+
+    Reading that as "unread" would resurrect every old message every sync.
+    """
+    mid = _msg(conn, acct, "old", unread=0, when="2020-01-01T09:00:00")
+    feeds.apply_read_state(conn, acct, set(), days=14)
+    assert conn.execute("SELECT is_unread FROM messages WHERE id=?",
+                        (mid,)).fetchone()["is_unread"] == 0
+
+
+def test_an_unpushed_edit_outranks_gmail(conn, acct):
+    """The local edit is the newer fact and the push is on its way."""
+    mid = _msg(conn, acct, "m1", unread=1)
+    feeds.set_message(conn, mid, is_unread=0)          # marks it dirty
+    feeds.apply_read_state(conn, acct, set())
+    assert conn.execute("SELECT is_unread FROM messages WHERE id=?",
+                        (mid,)).fetchone()["is_unread"] == 0
+
+
+def test_retired_mail_is_deleted_once_gmail_cannot_return_it(conn, acct):
+    mid = _msg(conn, acct, "m1", unread=0, when="2020-01-01T09:00:00")
+    _age(conn, mid, 30)
+    assert feeds.purge_retired(conn, read_days=7, window_days=14) == 1
+    assert conn.execute("SELECT COUNT(*) n FROM messages").fetchone()["n"] == 0
+
+
+def test_mail_gmail_would_hand_back_is_not_deleted(conn, acct):
+    """Deleting it means it returns on the next pull, looking new, and
+    starts its clock again -- a message that cannot be got rid of."""
+    import datetime as dt
+    recent = (dt.datetime.now(dt.UTC) - dt.timedelta(days=2)).strftime(
+        "%Y-%m-%dT%H:%M:%S")
+    mid = _msg(conn, acct, "m1", unread=0, when=recent)
+    _age(conn, mid, 30)
+    assert feeds.purge_retired(conn, read_days=7, window_days=14) == 0
+
+
+def test_the_purge_never_takes_unread_or_starred_mail(conn, acct):
+    a = _msg(conn, acct, "unread", unread=1, when="2020-01-01T09:00:00")
+    b = _msg(conn, acct, "starred", unread=0, starred=1,
+             when="2020-01-01T09:00:00")
+    _age(conn, b, 90)
+    conn.execute("UPDATE messages SET read_at=? WHERE id=?",
+                 ("2020-02-01T00:00:00", a))
+    conn.commit()
+    assert feeds.purge_retired(conn, read_days=7, window_days=14) == 0
+
+
+def test_the_purge_never_drops_an_unpushed_edit(conn, acct):
+    mid = _msg(conn, acct, "m1", unread=1, when="2020-01-01T09:00:00")
+    feeds.set_message(conn, mid, is_unread=0)          # dirty
+    _age(conn, mid, 90)
+    assert feeds.purge_retired(conn, read_days=7, window_days=14) == 0
+
+
+def test_zero_days_purges_nothing(conn, acct):
+    mid = _msg(conn, acct, "m1", unread=0, when="2020-01-01T09:00:00")
+    _age(conn, mid, 900)
+    assert feeds.purge_retired(conn, read_days=0, window_days=14) == 0
