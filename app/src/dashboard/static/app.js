@@ -33,6 +33,11 @@ const state = {
   // The budget tab has two screens: the chart you read, and the list you
   // edit. Kept apart because reading and editing want different layouts.
   editing: false, focusCategory: null,
+  // Where a tap on the home page was aiming. A widget row is a pointer at
+  // something, and following it has to land on that thing rather than on the
+  // top of the screen it lives in -- otherwise the tap has only saved you
+  // pressing a tab, and you still have to go and find it.
+  openMessage: null, calDay: null, calYear: null, calMonth: null,
 };
 
 /* Routing lives in the URL fragment.
@@ -45,11 +50,34 @@ function readHash() {
   if (VIEWS.some((v) => v.id === parts[0])) state.view = parts[0];
   state.editing = parts[0] === "budget" && parts[1] === "edit";
   if (/^\d{4}-\d{2}$/.test(parts[2] || "")) state.month = parts[2];
+
+  // A message or a day in the fragment, so a followed tap can be linked to,
+  // reloaded, and walked back out of with the browser's own back button.
+  if (parts[0] === "inbox" && /^[0-9a-f]{32}$/.test(parts[1] || "")) {
+    state.openMessage = parts[1];
+  }
+  if (parts[0] === "agenda" && /^\d{4}-\d{2}-\d{2}$/.test(parts[1] || "")) {
+    setDay(parts[1]);
+  }
+}
+
+/* Point the agenda at a day, month and all.
+ *
+ * Setting only the day looks right and is not: the grid draws whichever
+ * month calYear/calMonth say, so a day in another month selects something
+ * the screen is not showing. */
+function setDay(key) {
+  const [y, m] = key.split("-").map(Number);
+  state.calDay = key;
+  state.calYear = y;
+  state.calMonth = m - 1;
 }
 
 function writeHash() {
   const parts = [state.view];
   if (state.view === "budget" && state.editing) parts.push("edit", state.month);
+  if (state.view === "inbox" && state.openMessage) parts.push(state.openMessage);
+  if (state.view === "agenda" && state.calDay) parts.push(state.calDay);
   const next = "#/" + parts.join("/");
   if (location.hash !== next) {
     // replaceState, not a new entry: month paging would otherwise fill the
@@ -147,6 +175,10 @@ async function render() {
       await homeView(body, {
         onGo: (v) => go({ view: v, editing: false }),
         onSettings: () => go({ view: "settings" }),
+        // A tap on a row lands on the thing itself, not on the screen that
+        // happens to contain it.
+        onOpenMail: (id) => go({ view: "inbox", openMessage: id }),
+        onOpenDay: (key) => { setDay(key); return go({ view: "agenda" }); },
       });
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {

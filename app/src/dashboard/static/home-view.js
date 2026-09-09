@@ -54,6 +54,30 @@ function widget(kind, title, action, ...body) {
     el("div", { class: "node-body" }, ...body));
 }
 
+/* A whole widget that is one big target.
+ *
+ * Used where the widget has nothing else to press. A real button would have
+ * to wrap the header and the body, and a button cannot contain the heading
+ * structure without becoming a mess, so this is the role/tabindex form --
+ * which then owes the keyboard the behaviour a button would have given for
+ * free. Enter and Space both, because a role="button" that ignores Space is
+ * the half-implementation screen reader users learn to distrust.
+ */
+function openable(node, label, onOpen) {
+  node.classList.add("is-openable");
+  node.setAttribute("role", "button");
+  node.setAttribute("tabindex", "0");
+  node.setAttribute("aria-label", label);
+  node.addEventListener("click", onOpen);
+  node.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") {
+      e.preventDefault();
+      onOpen();
+    }
+  });
+  return node;
+}
+
 function empty(line, hint) {
   return el("div", { class: "empty" },
     el("div", { class: "big", text: line }),
@@ -126,10 +150,17 @@ function miniSpend(items) {
 /* ── budget ─────────────────────────────────────────────────────────────── */
 function budgetWidget(b, onGo) {
   if (!b.has_data) {
-    return widget("budget", "Budget", goto("Set up", onGo, "budget"),
-      empty("No categories yet",
-            "Add a few in the budget screen and this fills in."));
+    return openable(
+      widget("budget", "Budget", null,
+        empty("No categories yet",
+              "Add a few in the budget screen and this fills in.")),
+      "Set up the budget", () => onGo("budget"));
   }
+  return openable(budgetBody(b), `Open the budget for ${b.month}`,
+                  () => onGo("budget"));
+}
+
+function budgetBody(b) {
   const tbb = b.to_be_budgeted_cents;
   const tone = tbb === 0 ? "ok" : tbb > 0 ? "warn" : "danger";
   const pct = b.budgeted_cents > 0
@@ -149,7 +180,7 @@ function budgetWidget(b, onGo) {
               + (b.last_budgeted_month && b.last_budgeted_month !== b.month
                  ? ` — last set up in ${b.last_budgeted_month}` : "") }));
 
-  return widget("budget", `Budget · ${b.month}`, goto("Open", onGo, "budget"),
+  return widget("budget", `Budget · ${b.month}`, null,
     el("div", { class: "wstat" },
       el("span", { class: "stat-label", text: "to be budgeted" }),
       el("div", { class: "row" },
@@ -179,7 +210,7 @@ function budgetWidget(b, onGo) {
 }
 
 /* ── calendar ───────────────────────────────────────────────────────────── */
-function calendarWidget(c, onGo, onSettings) {
+function calendarWidget(c, onGo, onSettings, onOpenDay) {
   if (!c.connected) {
     return widget("agenda", "Agenda",
       el("button", { class: "btn", type: "button", text: "Connect",
@@ -193,15 +224,34 @@ function calendarWidget(c, onGo, onSettings) {
   }
   return widget("agenda", "Agenda", goto("Open", onGo, "agenda"),
     el("div", { class: "wlist" },
-      ...c.events.slice(0, 6).map((e) => el("div", { class: "wrow" },
+      ...c.events.slice(0, 6).map((e) => el("button", {
+        // A button, not a div with a click on it: this is reachable by
+        // keyboard and announced as pressable without any of it being
+        // reimplemented here.
+        class: "wrow wrow-hit", type: "button",
+        "aria-label": `Open ${e.title || "this event"} in the agenda`,
+        onclick: () => onOpenDay(dayKey(e)),
+      },
         el("span", { class: "wtime", text: whenLabel(e) }),
         el("span", { class: "grow" },
           el("div", { text: e.title || "(untitled)" }),
           e.location ? el("div", { class: "hint", text: e.location }) : null)))));
 }
 
+/* The calendar day an event belongs to, in the reader's own zone.
+ *
+ * Not starts_at.slice(0, 10): that is the UTC date, and an event at 8pm in
+ * Austin is stored on the following day. Tapping it would open a day with
+ * nothing on it, which reads as the tap having failed. */
+function dayKey(e) {
+  const d = fromServer(e.starts_at, { floating: e.all_day });
+  if (!d) return String(e.starts_at || "").slice(0, 10);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 /* ── mail ───────────────────────────────────────────────────────────────── */
-function mailWidget(m, onGo, onSettings) {
+function mailWidget(m, onGo, onSettings, onOpenMail) {
   if (!m.connected) {
     return widget("inbox", "Inbox",
       el("button", { class: "btn", type: "button", text: "Connect",
@@ -215,7 +265,11 @@ function mailWidget(m, onGo, onSettings) {
   }
   return widget("inbox", "Inbox", goto("Open", onGo, "inbox"),
     el("div", { class: "wlist" },
-      ...m.messages.slice(0, 5).map((x) => el("div", { class: "wrow" },
+      ...m.messages.slice(0, 5).map((x) => el("button", {
+        class: "wrow wrow-hit", type: "button",
+        "aria-label": `Read ${x.subject || "this message"}`,
+        onclick: () => onOpenMail(x.id),
+      },
         el("span", {
           class: "pill " + (x.score >= 5 ? "danger" : x.score >= 4 ? "warn" : "info"),
           text: String(x.score) }),
@@ -224,14 +278,15 @@ function mailWidget(m, onGo, onSettings) {
           el("div", { class: "hint", text: x.sender || "" }))))));
 }
 
-export async function homeView(container, { onGo, onSettings }) {
+export async function homeView(container,
+                              { onGo, onSettings, onOpenMail, onOpenDay }) {
   const d = await get("/api/view/home");
   // Inbox and budget share the top; the agenda takes the full width beneath
   // them. What is coming up is a sequence, and a sequence wants length --
   // squeezed into a third of the width it shows two entries and a scrollbar.
   mount(container,
     el("div", { class: "widgets" },
-      mailWidget(d.mail, onGo, onSettings),
+      mailWidget(d.mail, onGo, onSettings, onOpenMail),
       budgetWidget(d.budget, onGo),
-      calendarWidget(d.calendar, onGo, onSettings)));
+      calendarWidget(d.calendar, onGo, onSettings, onOpenDay)));
 }

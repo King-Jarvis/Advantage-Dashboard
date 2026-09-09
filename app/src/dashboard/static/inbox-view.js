@@ -62,7 +62,8 @@ export async function inboxView(root, state) {
   let all = [];
   let band = state.inboxBand || "all";
   let busy = new Set();
-  let openId = null;
+  // Arrives set when a tap on the home page was aiming at one message.
+  let openId = state.openMessage || null;
   const bodies = new Map();     // id -> {blocks, body}, so reopening is free
 
   const list = el("div", { class: "mail-list" });
@@ -125,8 +126,16 @@ export async function inboxView(root, state) {
 
   async function openRow(m) {
     // Toggling closed must not clear the cache: reopening is free.
-    if (openId === m.id) { openId = null; render(); return; }
+    if (openId === m.id) {
+      openId = null;
+      state.openMessage = null;
+      render();
+      return;
+    }
     openId = m.id;
+    // Kept on the shared state so the address bar follows, which makes an
+    // open message linkable and lets the back button close it.
+    state.openMessage = m.id;
     // Opening a message is reading it, so say so -- and only once.
     if (m.is_unread) act(m, { is_unread: 0 });
     render();
@@ -259,6 +268,7 @@ export async function inboxView(root, state) {
     return el("article", {
       class: "mail-row" + (m.is_unread ? " is-unread" : "")
            + (score <= 1 ? " is-quiet" : "") + (isOpen ? " is-open" : ""),
+      dataset: { id: m.id },
     }, rank,
        el("div", { class: "mail-body" },
          el("button", { class: "mail-hit", type: "button",
@@ -312,6 +322,39 @@ export async function inboxView(root, state) {
       return;
     }
     render();
+
+    // Followed from the home page: the message has to be opened and its body
+    // fetched, and it has to be brought into view. Landing at the top of a
+    // list with the thing you tapped somewhere below is the tap not having
+    // worked, as far as anyone reading can tell.
+    if (openId) {
+      const target = all.find((m) => m.id === openId);
+      if (target) {
+        // A filter chip that excludes the message would hide the thing that
+        // was just tapped. Following a pointer outranks the filter that was
+        // left set on a screen nobody was looking at.
+        if (!shown().some((m) => m.id === target.id)) {
+          band = "all";
+          state.inboxBand = "all";
+        }
+        openId = null;                 // so openRow treats this as an open
+        await openRow(target);
+        reveal(openId);
+      } else {
+        openId = null;
+        state.openMessage = null;
+      }
+    }
+  }
+
+  function reveal(id) {
+    if (!id) return;
+    requestAnimationFrame(() => {
+      const node = list.querySelector(`[data-id="${id}"]`);
+      if (node && node.scrollIntoView) {
+        node.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
+    });
   }
 
   mount(root, el("section", { class: "mail" },

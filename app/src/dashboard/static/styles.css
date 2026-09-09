@@ -621,6 +621,45 @@ a:hover { text-decoration: underline; }
 .ok-line { color: var(--text-3); }
 .widget .empty { padding: var(--s5) var(--s2); margin: auto 0; }
 
+/* ── widgets you can follow ───────────────────────────────────────────────
+   A widget row points at something. Following it should land on that thing,
+   and it should look like it will. */
+
+/* A row that is a button has to stop looking like one: the widget is a list,
+   not a toolbar, and five button-shaped rows read as five controls. */
+.wrow-hit {
+  width: 100%; background: none; border: 0; border-bottom: 1px solid var(--line);
+  font: inherit; color: inherit; text-align: left; cursor: pointer;
+  border-radius: 0;
+}
+.wrow-hit:last-child { border-bottom: 0; }
+
+/* Whole-widget targets. Not a cursor change alone -- on a touch screen there
+   is no cursor, so the affordance has to be something that survives a
+   finger: the press state below. */
+.is-openable { cursor: pointer; }
+
+/* Feedback on press, which is the only affordance a touch screen gets. Kept
+   to a background and a hairline so a widget does not jump under the finger
+   that is holding it. */
+.wrow-hit:active,
+.is-openable:active { background: var(--surface-2); }
+
+@media (hover: hover) {
+  .wrow-hit:hover { background: var(--surface-2); }
+  .is-openable:hover { border-color: var(--line-lit); }
+}
+
+/* Keyboard users get the same target and need to see where they are. */
+.wrow-hit:focus-visible,
+.is-openable:focus-visible {
+  outline: 2px solid var(--brand); outline-offset: -2px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .is-openable { transition: border-color var(--fast) var(--ease); }
+}
+
 /* ── Mini spending chart ────────────────────────────────────────────────── */
 .minibox { display: flex; flex-direction: column; gap: var(--s1); }
 .mini { width: 100%; height: 82px; display: block; }
