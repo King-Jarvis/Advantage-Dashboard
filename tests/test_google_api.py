@@ -571,3 +571,111 @@ def test_the_window_covers_more_than_the_month_you_are_standing_in(conn, acct,
     lo = dt.datetime.fromisoformat(seen["timeMin"])
     hi = dt.datetime.fromisoformat(seen["timeMax"])
     assert (hi - lo).days >= 300, "a calendar that shows one month is not one"
+
+
+# ── security alerts ───────────────────────────────────────────────────────
+SECURITY_SUBJECTS = [
+    "Security alert",
+    "Critical security alert for your linked Google Account",
+    "New sign-in from Chrome on Windows",
+    "New sign in to your account",
+    "Suspicious activity detected on your account",
+    "Unusual sign-in attempt blocked",
+    "Unrecognized device signed in",
+    "Your password was changed",
+    "Your password has been reset",
+    "Reset your password",
+    "Your verification code is 483920",
+    "Verify your identity to continue",
+    "Two-factor authentication is now on",
+    "2-step verification was turned off",
+    "Your account has been locked",
+    "Someone signed in to your account",
+]
+
+NOT_SECURITY_SUBJECTS = [
+    "Security tips for your smart home",
+    "Your security is our priority",
+    "Home security cameras, 40% off this week",
+    "Quarterly newsletter from the security team",
+    "Lunch tomorrow?",
+    "Your order has shipped",
+    "Invoice 4482 attached",
+]
+
+
+@pytest.mark.parametrize("subject", SECURITY_SUBJECTS)
+def test_a_security_alert_is_recognised(subject):
+    assert google_api._is_security(subject), subject
+
+
+@pytest.mark.parametrize("subject", NOT_SECURITY_SUBJECTS)
+def test_marketing_that_says_security_is_not_an_alert(subject):
+    """The band fills with marketing and stops being read, which costs more
+    than the alert it was meant to protect."""
+    assert not google_api._is_security(subject), subject
+
+
+def test_a_security_alert_outranks_the_machine_rule(conn):
+    """They are machine-sent by definition, and that rule caps at 3."""
+    capped = google_api._baseline(["UNREAD"], direct=True, machine=True)[0]
+    assert capped == 3
+    score, reason = google_api._baseline(["UNREAD"], direct=True, machine=True,
+                                         security=True)
+    assert score == 5
+    assert "security" in reason
+
+
+def test_a_security_alert_beats_being_read_and_indirect(conn):
+    assert google_api._baseline([], security=True)[0] == 5
+
+
+def test_a_mailing_cannot_claim_the_security_band(conn):
+    """A real alert is transactional and carries no unsubscribe link, so
+    requiring that costs nothing genuine and shuts out the marketing -- and
+    the phishing that imitates it, which is the same shape."""
+    score, _ = google_api._baseline(["UNREAD"], bulk=True, security=True)
+    assert score < 5
+
+
+def test_spam_cannot_claim_the_security_band(conn):
+    score, _ = google_api._baseline(["UNREAD", "SPAM"], security=True)
+    assert score < 5
+
+
+def test_a_security_alert_outscores_a_friend(conn, acct, monkeypatch):
+    """End to end, with the headers Gmail actually sends.
+
+    A sign-in alert is machine-sent and not addressed personally, so every
+    other rule in the scorer puts it below a note from a person. It is the
+    one automated notice worth interrupting for.
+    """
+    def hdrs(pairs):
+        return [{"name": k, "value": v} for k, v in pairs]
+    _mail(monkeypatch, {"messages": [{"id": "s1"}, {"id": "p1"}, {"id": "m1"}]}, {
+        "s1": {"id": "s1", "labelIds": ["INBOX", "UNREAD"],
+               "internalDate": "1756713600000",
+               "payload": {"headers": hdrs([
+                   ("From", "Google <no-reply@accounts.google.com>"),
+                   ("To", "a@example.com"),
+                   ("Subject", "Security alert for your linked Google Account")])}},
+        "p1": {"id": "p1", "labelIds": ["INBOX", "UNREAD"],
+               "internalDate": "1756713600000",
+               "payload": {"headers": hdrs([
+                   ("From", "Sam <sam@example.com>"),
+                   ("To", "a@example.com"),
+                   ("Subject", "are you free thursday")])}},
+        # Says the word, carries an unsubscribe link: not an alert.
+        "m1": {"id": "m1", "labelIds": ["INBOX", "UNREAD"],
+               "internalDate": "1756713600000",
+               "payload": {"headers": hdrs([
+                   ("From", "Deals <deals@example.com>"),
+                   ("To", "a@example.com"),
+                   ("List-Unsubscribe", "<https://example.com/u>"),
+                   ("Subject", "Security alert: 40% off home cameras")])}},
+    })
+    by_id = {m["source_uid"]: m for m in google_api.fetch_messages(conn, acct)}
+    assert by_id["s1"]["importance"] == 5
+    assert "security" in by_id["s1"]["reason"]
+    assert by_id["s1"]["importance"] > by_id["p1"]["importance"]
+    assert by_id["m1"]["importance"] < 5

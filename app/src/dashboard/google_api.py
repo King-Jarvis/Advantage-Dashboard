@@ -450,7 +450,38 @@ def _is_machine(address):
     return bool(MACHINE.search(str(address or "").split("@")[0]))
 
 
-def _baseline(labels, bulk=False, direct=False, machine=False):
+# Mail telling you something happened to an account. Whole phrases, not the
+# word "security" on its own -- "security tips", "your security is our
+# priority" and half of every marketing footer contain that word, and a band
+# that fills with marketing stops being read, which costs more than the alert
+# it was protecting.
+#
+# A 2FA code counts. It is the most time-critical mail anyone receives: you
+# are standing at a login screen waiting for it.
+_SECURITY = re.compile(
+    r"security alert"
+    r"|securityalert"
+    r"|critical (?:security|alert)"
+    r"|new (?:sign[- ]?in|login|device)"
+    r"|(?:unusual|suspicious|unrecognized|unrecognised) "
+    r"(?:activity|sign[- ]?in|login|device|access)"
+    r"|password (?:was|has been|is being) (?:changed|reset)"
+    r"|(?:reset|change) your password"
+    r"|verification code"
+    r"|(?:verify|confirm) your identity"
+    r"|two[- ]?(?:factor|step)|2[- ]?(?:factor|step)"
+    r"|account (?:was|has been) (?:locked|suspended|compromised)"
+    r"|someone (?:has |)(?:signed|logged) in",
+    re.I)
+
+
+def _is_security(subject):
+    """Does this subject say something happened to an account?"""
+    return bool(_SECURITY.search(subject or ""))
+
+
+def _baseline(labels, bulk=False, direct=False, machine=False,
+              security=False):
     """A first-pass importance from signals that cost nothing to read.
 
     Deliberately dull and explainable. It exists so the inbox is useful before
@@ -474,6 +505,19 @@ def _baseline(labels, bulk=False, direct=False, machine=False):
 
     if "STARRED" in labels:
         return 5, "you starred it"
+
+    # Above the machine rule below, which would otherwise cap these at 3 --
+    # and they are machine-sent by definition. An account being signed into
+    # is the one automated notice worth interrupting for.
+    #
+    # Bulk and spam are excluded rather than scored, because they are the two
+    # ways this band could be claimed by something that merely says the
+    # words. A real alert is transactional and carries no unsubscribe link,
+    # so requiring that costs nothing genuine and shuts the door on
+    # marketing -- and on the phishing that imitates it, which is worth
+    # noticing is the same shape.
+    if security and not bulk and "SPAM" not in labels:
+        return 5, "a security alert about one of your accounts"
     if "IMPORTANT" in labels and unread and not machine:
         return 4, "Gmail marked this important and it is unread"
     if "IMPORTANT" in labels:
@@ -529,8 +573,9 @@ def fetch_messages(conn, account_id, query="-in:chats newer_than:14d",
         name, addr = _split_from(_header(headers, "From"))
         bulk = bool(_header(headers, "List-Unsubscribe"))
         direct = bool(mine) and mine in _header(headers, "To").lower()
-        score, reason = _baseline(labels, bulk=bulk, direct=direct,
-                                  machine=_is_machine(addr))
+        score, reason = _baseline(
+            labels, bulk=bulk, direct=direct, machine=_is_machine(addr),
+            security=_is_security(_header(headers, "Subject")))
         received = ""
         if full.get("internalDate"):
             received = _dt.datetime.fromtimestamp(
