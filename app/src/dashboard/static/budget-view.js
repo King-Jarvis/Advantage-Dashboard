@@ -469,19 +469,6 @@ function detail(cat, suggestion, refresh) {
     get(`/api/view/history?month=${state.month}&category=${cat.id}&months=12`),
     get(`/api/view/transactions?category=${cat.id}&month=${state.month}&limit=12`),
   ]).then(([h, t]) => {
-    const facts = el("div", { class: "facts" },
-      fact("basis", h.basis || "—"),
-      fact("covered months", String(h.sample_months)),
-      fact("confidence", h.confidence),
-      fact("normally", h.typical_cents ? money(h.typical_cents) : "—"),
-      fact("heading for", h.estimate_cents ? money(h.estimate_cents) : "—"),
-      fact("aim for", h.suggested_cents === null ? "—" : money(h.suggested_cents)),
-      fact("why", h.target_reason || ""),
-      el("div", { class: "factrow" },
-        el("span", { class: "label", text: "how movable" }), flex),
-      fact("range", h.low_cents === null ? "—"
-        : `${money(h.low_cents)} – ${money(h.high_cents)}`));
-
     /* How much room this category has to be cut, which is what separates
      * "aim for" from "heading for". Rent cannot be budgeted down by wanting
      * it to be; a restaurant habit can. Left where the number it changes is
@@ -501,6 +488,19 @@ function detail(cat, suggestion, refresh) {
       }
       refresh();
     });
+
+    const facts = el("div", { class: "facts" },
+      fact("basis", h.basis || "—"),
+      fact("covered months", String(h.sample_months)),
+      fact("confidence", h.confidence),
+      fact("normally", h.typical_cents ? money(h.typical_cents) : "—"),
+      fact("heading for", h.estimate_cents ? money(h.estimate_cents) : "—"),
+      fact("aim for", h.suggested_cents === null ? "—" : money(h.suggested_cents)),
+      fact("why", h.target_reason || ""),
+      el("div", { class: "factrow" },
+        el("span", { class: "label", text: "how movable" }), flex),
+      fact("range", h.low_cents === null ? "—"
+        : `${money(h.low_cents)} – ${money(h.high_cents)}`));
 
     const accept = h.suggested_cents === null ? null : el("button", {
       class: "btn primary", type: "button",

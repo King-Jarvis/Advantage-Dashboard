@@ -53,6 +53,11 @@ jobs:
         # answer in UTC, so a suite that runs there cannot see the bug.
         run: ./scripts/check-js-behaviour.sh
 
+      - name: nothing used before it is declared
+        # const is not hoisted, so this throws at runtime while the file
+        # still parses -- check-js-syntax cannot see it.
+        run: ./scripts/check-js-declared-first.sh
+
       - name: nothing personal or financial is tracked
         run: ./scripts/check-no-personal-data.sh
 

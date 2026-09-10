@@ -40,6 +40,12 @@ repos:
         language: system
         pass_filenames: false
 
+      - id: js-declared-first
+        name: nothing used before it is declared
+        entry: scripts/check-js-declared-first.sh
+        language: system
+        pass_filenames: false
+
       - id: js-behaviour
         name: front-end behaviour
         entry: scripts/check-js-behaviour.sh
