@@ -19,7 +19,7 @@ jobs:
     name: leak & XSS guards
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Full history: a secret removed in the tip commit is still public
           # in the history, so the scan has to see all of it.
@@ -65,7 +65,7 @@ jobs:
     name: lint & test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -114,7 +114,7 @@ jobs:
     name: dependency manifests agree
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: the two requirements files must not drift
         run: |
           # install.sh installs app/requirements.txt; the documented manual
