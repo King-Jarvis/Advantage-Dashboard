@@ -2503,3 +2503,71 @@ def test_the_overview_says_when_a_starting_balance_is_missing(live):
     _, _, body = call(live, "GET", "/api/view/overview?month=2026-08",
                       headers={"Cookie": cookie})
     assert body["savings"]["accounts_without_opening"] == 1
+
+
+# ── a refusal must not corrupt the next request ───────────────────────────
+def _raw(port, payload):
+    """One socket, several requests, exactly as a browser reuses one."""
+    import socket
+    s = socket.create_connection(("127.0.0.1", port), timeout=5)
+    s.sendall(payload)
+    out = b""
+    s.settimeout(2)
+    try:
+        while True:
+            chunk = s.recv(65536)
+            if not chunk:
+                break
+            out += chunk
+    except (TimeoutError, OSError):
+        pass
+    s.close()
+    return out
+
+
+def test_a_refused_post_does_not_break_the_next_request(live):
+    """The body of a refused request is still queued on the socket.
+
+    Answering 401 without reading it left "{}" in front of the next request
+    line, so the following GET arrived as "{}GET /..." and came back 501.
+    Ten of those are in the log this was written against.
+    """
+    body = b"{}"
+    payload = (
+        b"POST /api/categorize HTTP/1.1\r\nHost: x\r\n"
+        b"Content-Type: application/json\r\n"
+        b"Content-Length: %d\r\n\r\n%s" % (len(body), body)
+        + b"GET /api/health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+    out = _raw(live, payload)
+    assert b"401" in out, "the POST is still refused"
+    assert b"501" not in out, "the GET after it must parse"
+    assert b"Unsupported method" not in out
+    assert out.count(b"HTTP/1.") == 2, "both requests answered"
+
+
+def test_a_csrf_refusal_does_not_break_the_next_request(live):
+    cookie, _ = login(live)
+    body = b'{"name":"X"}'
+    payload = (
+        b"POST /api/accounts HTTP/1.1\r\nHost: x\r\n"
+        + b"Cookie: " + cookie.encode() + b"\r\n"
+        b"Content-Type: application/json\r\n"
+        b"Content-Length: %d\r\n\r\n%s" % (len(body), body)
+        + b"GET /api/health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+    out = _raw(live, payload)
+    assert b"403" in out
+    assert b"501" not in out
+    assert out.count(b"HTTP/1.") == 2
+
+
+def test_a_wrong_method_does_not_break_the_next_request(live):
+    body = b"{}"
+    payload = (
+        b"POST /api/view/budget HTTP/1.1\r\nHost: x\r\n"
+        b"Content-Type: application/json\r\n"
+        b"Content-Length: %d\r\n\r\n%s" % (len(body), body)
+        + b"GET /api/health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+    out = _raw(live, payload)
+    assert b"405" in out
+    assert b"501" not in out
+    assert out.count(b"HTTP/1.") == 2

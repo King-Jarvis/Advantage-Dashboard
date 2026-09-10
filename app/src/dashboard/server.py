@@ -166,7 +166,14 @@ class Handler(BaseHTTPRequestHandler):
             storage.log("http " + (fmt % args))
 
     def log_error(self, fmt, *args):
-        storage.log("http error: " + (fmt % args))
+        msg = fmt % args
+        # A socket that connects and never sends a byte is a browser
+        # preconnecting, not a failure. Chrome opens several per page and
+        # abandons most of them; logged, they were 989 of the 999 lines in
+        # this file and buried the ten that meant something.
+        if "timed out" in msg.lower():
+            return
+        storage.log("http error: " + msg)
 
     def handle_one_request(self):
         # One handler instance serves every request on a keep-alive
@@ -175,6 +182,12 @@ class Handler(BaseHTTPRequestHandler):
         # answered, and nothing is written -- the browser then waits forever
         # on a connection that will never speak again.
         self._sent = False
+        # Whether this request's body has been taken off the socket. An
+        # error answered before reading it leaves it there, and on a
+        # keep-alive connection the next request line starts with whatever
+        # was left -- which is how "{}GET /api/..." reaches the parser and
+        # comes back as 501 Unsupported method.
+        self._body_read = False
         # A handler thread that dies takes its connection with it, which the
         # browser experiences as the page hanging. Log it instead.
         try:
@@ -185,7 +198,40 @@ class Handler(BaseHTTPRequestHandler):
             storage.log("handler crashed:\n" + traceback.format_exc())
             self.close_connection = True
 
+    def _drain_body(self):
+        """Take an unread request body off the socket before answering.
+
+        Every early refusal -- 401, 403, 405 -- responds without having read
+        the body, because the reason to refuse was in the headers. HTTP
+        allows answering early, but the bytes are still queued, and this
+        server keeps the connection alive.
+
+        Bounded: past the cap the sender is not a browser with a large
+        upload, and reading an unbounded body on request is a way to be kept
+        busy for free. The connection is dropped instead, which is the other
+        legal way to leave a body unread.
+        """
+        if self._body_read or self.command in ("GET", "HEAD"):
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        self._body_read = True
+        if length <= 0:
+            return
+        if length > self.DRAIN_CAP:
+            self.close_connection = True
+            return
+        remaining = length
+        while remaining > 0:
+            chunk = self.rfile.read(min(65536, remaining))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+
     def _send(self, code, body=b"", ctype="application/octet-stream", extra=None):
+        self._drain_body()
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
@@ -208,6 +254,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def body_json(self):
         length = int(self.headers.get("Content-Length") or 0)
+        self._body_read = True
         if length <= 0:
             return {}
         if length > MAX_BODY:
@@ -1337,6 +1384,7 @@ class Handler(BaseHTTPRequestHandler):
         that point the sender is not a browser with a large statement.
         """
         length = int(self.headers.get("Content-Length") or 0)
+        self._body_read = True
         if length <= 0:
             raise ValueError("no file was sent")
         if length > limit:
