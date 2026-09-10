@@ -53,19 +53,8 @@ jobs:
         # answer in UTC, so a suite that runs there cannot see the bug.
         run: ./scripts/check-js-behaviour.sh
 
-      - name: nothing sensitive is tracked
-        run: |
-          # A .gitignore rule only helps if it was already there when the file
-          # was added. This catches the case where it wasn't.
-          fail=0
-          if git ls-files | grep -E '(^|/)\.env$|\.(db|sqlite3?|key|pem|ofx|qfx)$'; then
-            echo "BLOCKED — a sensitive file type is tracked"; fail=1
-          fi
-          if git ls-files deploy/secrets | grep -v -x 'deploy/secrets/.gitkeep' | grep .; then
-            echo "BLOCKED — a real secret file is tracked"; fail=1
-          fi
-          [ "$fail" -eq 0 ] && echo "clean — no sensitive files tracked"
-          exit "$fail"
+      - name: nothing personal or financial is tracked
+        run: ./scripts/check-no-personal-data.sh
 
   python:
     name: lint & test
