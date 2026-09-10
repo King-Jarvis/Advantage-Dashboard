@@ -1047,8 +1047,8 @@ def transaction_detail(conn, txn_id):
 
     The list can only afford a line per row, so it shows the bank's NAME
     field -- which the bank truncates, often at thirty-two characters. The
-    MEMO it also sent is usually longer and more specific ("SQ *CORNER
-    KITCHEN - PA Austin TX" against "Riverside Cafe - Br Bristol Uk W"), and
+    MEMO it also sent is usually longer and more specific ("SQ *RIVERSIDE
+    CAFE - BR Bristol UK" against "Riverside Cafe - Br Bristol Uk W"), and
     was being stored and never shown. On this ledger that is true of most
     rows, which makes "what actually was this?" a question the screen could
     not answer about almost anything.
