@@ -73,6 +73,14 @@ jobs:
       - name: install dev tooling
         run: python -m pip install --upgrade pip ruff pytest
 
+      - name: install the runtime dependency
+        # The app is the standard library plus cryptography, and the tests
+        # exercise the code that uses it: storing a Google refresh token
+        # encrypts it, and crypt.encrypt refuses rather than falling back to
+        # plaintext. Without this the suite does not fail in ones and twos --
+        # 78 tests error before it reaches the end of the third module.
+        run: python -m pip install -r requirements.txt
+
       - name: ruff
         run: ruff check app tests scripts 2>/dev/null || ruff check app tests
 
