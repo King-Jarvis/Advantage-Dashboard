@@ -7,4 +7,4 @@
 #
 # Pinned exactly. Run pip-compile or add --require-hashes for a deployment
 # that needs supply-chain guarantees beyond a version pin.
-cryptography==50.0.1
+cryptography==50.0.2

@@ -11,4 +11,4 @@
 #
 # Pinned rather than floating: an install run six months from now should get
 # the version this was tested against, not whatever shipped last week.
-cryptography==50.0.1
+cryptography==50.0.2
